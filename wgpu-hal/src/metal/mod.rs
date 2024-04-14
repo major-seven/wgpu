@@ -434,6 +434,7 @@ impl crate::Queue for Queue {
             }
 
             command_buffer.commit();
+            command_buffer.wait_until_scheduled();
 
             if texture.present_with_transaction {
                 command_buffer.wait_until_scheduled();
