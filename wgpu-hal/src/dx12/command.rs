@@ -249,9 +249,7 @@ impl super::CommandEncoder {
     }
 }
 
-impl crate::CommandEncoder for super::CommandEncoder {
-    type A = super::Api;
-
+impl crate::CommandEncoder<super::Api> for super::CommandEncoder {
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
         let list = loop {
             if let Some(list) = self.free_lists.pop() {
@@ -298,13 +296,14 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
     unsafe fn end_encoding(&mut self) -> Result<super::CommandBuffer, crate::DeviceError> {
         let raw = self.list.take().unwrap();
-        raw.close()
-            .into_device_result("GraphicsCommandList::close")?;
-        Ok(super::CommandBuffer { raw })
+        let closed = raw.close().into_result().is_ok();
+        Ok(super::CommandBuffer { raw, closed })
     }
     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
         for cmd_buf in command_buffers {
-            self.free_lists.push(cmd_buf.raw);
+            if cmd_buf.closed {
+                self.free_lists.push(cmd_buf.raw);
+            }
         }
         self.allocator.reset();
     }

@@ -80,9 +80,7 @@ impl Instance {
     }
 }
 
-impl crate::Instance for Instance {
-    type A = Api;
-
+impl crate::Instance<Api> for Instance {
     unsafe fn init(_desc: &crate::InstanceDescriptor) -> Result<Self, crate::InstanceError> {
         profiling::scope!("Init Metal Backend");
         // We do not enable metal validation based on the validation flags as it affects the entire
@@ -250,7 +248,6 @@ struct PrivateCapabilities {
     max_texture_layers: u64,
     max_fragment_input_components: u64,
     max_color_render_targets: u8,
-    max_color_attachment_bytes_per_sample: u8,
     max_varying_components: u32,
     max_threads_per_group: u32,
     max_total_threadgroup_memory: u32,
@@ -367,13 +364,10 @@ impl std::borrow::Borrow<Texture> for SurfaceTexture {
 unsafe impl Send for SurfaceTexture {}
 unsafe impl Sync for SurfaceTexture {}
 
-impl crate::Queue for Queue {
-    type A = Api;
-
+impl crate::Queue<Api> for Queue {
     unsafe fn submit(
         &self,
         command_buffers: &[&CommandBuffer],
-        _surface_textures: &[&SurfaceTexture],
         signal_fence: Option<(&mut Fence, crate::FenceValue)>,
     ) -> Result<(), crate::DeviceError> {
         objc::rc::autoreleasepool(|| {
@@ -434,7 +428,6 @@ impl crate::Queue for Queue {
             }
 
             command_buffer.commit();
-            command_buffer.wait_until_scheduled();
 
             if texture.present_with_transaction {
                 command_buffer.wait_until_scheduled();

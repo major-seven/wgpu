@@ -49,7 +49,7 @@ impl<'source> ParsingContext<'source> {
         }
 
         // Type names can identify either declaration statements or type constructors
-        // depending on whether the token following the type name is a `(` (LeftParen)
+        // depending on wether the token following the type name is a `(` (LeftParen)
         if self.peek_type_name(frontend) {
             // Start by consuming the type name so that we can peek the token after it
             let token = self.bump(frontend)?;
@@ -192,13 +192,10 @@ impl<'source> ParsingContext<'source> {
                         TokenValue::Case => {
                             self.bump(frontend)?;
 
-                            let (const_expr, meta) = self.parse_constant_expression(
-                                frontend,
-                                ctx.module,
-                                ctx.global_expression_kind_tracker,
-                            )?;
+                            let (const_expr, meta) =
+                                self.parse_constant_expression(frontend, ctx.module)?;
 
-                            match ctx.module.global_expressions[const_expr] {
+                            match ctx.module.const_expressions[const_expr] {
                                 Expression::Literal(Literal::I32(value)) => match uint {
                                     // This unchecked cast isn't good, but since
                                     // we only reach this code when the selector

@@ -6,11 +6,14 @@ use crate::{
     },
     error::{ErrorFormatter, PrettyError},
     hal_api::HalApi,
-    id::{BindGroupLayoutId, BufferId, SamplerId, TextureId, TextureViewId},
+    id::{
+        BindGroupId, BindGroupLayoutId, BufferId, PipelineLayoutId, SamplerId, TextureId,
+        TextureViewId,
+    },
     init_tracker::{BufferInitTrackerAction, TextureInitTrackerAction},
     resource::{Resource, ResourceInfo, ResourceType},
     resource_log,
-    snatch::{SnatchGuard, Snatchable},
+    snatch::SnatchGuard,
     track::{BindGroupStates, UsageConflict},
     validation::{MissingBufferUsageError, MissingTextureUsageError},
     Label,
@@ -18,9 +21,9 @@ use crate::{
 
 use arrayvec::ArrayVec;
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "replay")]
 use serde::Deserialize;
-#[cfg(feature = "serde")]
+#[cfg(feature = "trace")]
 use serde::Serialize;
 
 use std::{borrow::Cow, ops::Range, sync::Arc};
@@ -38,8 +41,6 @@ pub enum BindGroupLayoutEntryError {
     ArrayUnsupported,
     #[error("Multisampled binding with sample type `TextureSampleType::Float` must have filterable set to false.")]
     SampleTypeFloatFilterableBindingMultisampled,
-    #[error("Multisampled texture binding view dimension must be 2d, got {0:?}")]
-    Non2DMultisampled(wgt::TextureViewDimension),
     #[error(transparent)]
     MissingFeatures(#[from] MissingFeatures),
     #[error(transparent)]
@@ -427,7 +428,8 @@ impl BindingTypeMaxCountValidator {
 
 /// Bindable resource and the slot to bind it to.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "trace", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct BindGroupEntry<'a> {
     /// Slot for which binding provides resource. Corresponds to an entry of the same
     /// binding index in the [`BindGroupLayoutDescriptor`].
@@ -438,7 +440,8 @@ pub struct BindGroupEntry<'a> {
 
 /// Describes a group of bindings and the resources to be bound.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "trace", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct BindGroupDescriptor<'a> {
     /// Debug label of the bind group.
     ///
@@ -452,7 +455,8 @@ pub struct BindGroupDescriptor<'a> {
 
 /// Describes a [`BindGroupLayout`].
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "trace", derive(serde::Serialize))]
+#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
 pub struct BindGroupLayoutDescriptor<'a> {
     /// Debug label of the bind group layout.
     ///
@@ -461,6 +465,8 @@ pub struct BindGroupLayoutDescriptor<'a> {
     /// Array of entries in this BindGroupLayout
     pub entries: Cow<'a, [wgt::BindGroupLayoutEntry]>,
 }
+
+pub type BindGroupLayouts<A> = crate::storage::Storage<BindGroupLayout<A>, BindGroupLayoutId>;
 
 /// Bind group layout.
 #[derive(Debug)]
@@ -477,7 +483,7 @@ pub struct BindGroupLayout<A: HalApi> {
     pub(crate) origin: bgl::Origin,
     #[allow(unused)]
     pub(crate) binding_count_validator: BindingTypeMaxCountValidator,
-    pub(crate) info: ResourceInfo<BindGroupLayout<A>>,
+    pub(crate) info: ResourceInfo<BindGroupLayoutId>,
     pub(crate) label: String,
 }
 
@@ -501,16 +507,14 @@ impl<A: HalApi> Drop for BindGroupLayout<A> {
     }
 }
 
-impl<A: HalApi> Resource for BindGroupLayout<A> {
+impl<A: HalApi> Resource<BindGroupLayoutId> for BindGroupLayout<A> {
     const TYPE: ResourceType = "BindGroupLayout";
 
-    type Marker = crate::id::markers::BindGroupLayout;
-
-    fn as_info(&self) -> &ResourceInfo<Self> {
+    fn as_info(&self) -> &ResourceInfo<BindGroupLayoutId> {
         &self.info
     }
 
-    fn as_info_mut(&mut self) -> &mut ResourceInfo<Self> {
+    fn as_info_mut(&mut self) -> &mut ResourceInfo<BindGroupLayoutId> {
         &mut self.info
     }
 
@@ -600,9 +604,10 @@ pub enum PushConstantUploadError {
 ///
 /// A `PipelineLayoutDescriptor` can be used to create a pipeline layout.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "trace", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct PipelineLayoutDescriptor<'a> {
-    /// Debug label of the pipeline layout.
+    /// Debug label of the pipeine layout.
     ///
     /// This will show up in graphics debuggers for easy identification.
     pub label: Label<'a>,
@@ -623,7 +628,7 @@ pub struct PipelineLayoutDescriptor<'a> {
 pub struct PipelineLayout<A: HalApi> {
     pub(crate) raw: Option<A::PipelineLayout>,
     pub(crate) device: Arc<Device<A>>,
-    pub(crate) info: ResourceInfo<PipelineLayout<A>>,
+    pub(crate) info: ResourceInfo<PipelineLayoutId>,
     pub(crate) bind_group_layouts: ArrayVec<Arc<BindGroupLayout<A>>, { hal::MAX_BIND_GROUPS }>,
     pub(crate) push_constant_ranges: ArrayVec<wgt::PushConstantRange, { SHADER_STAGE_COUNT }>,
 }
@@ -737,23 +742,22 @@ impl<A: HalApi> PipelineLayout<A> {
     }
 }
 
-impl<A: HalApi> Resource for PipelineLayout<A> {
+impl<A: HalApi> Resource<PipelineLayoutId> for PipelineLayout<A> {
     const TYPE: ResourceType = "PipelineLayout";
 
-    type Marker = crate::id::markers::PipelineLayout;
-
-    fn as_info(&self) -> &ResourceInfo<Self> {
+    fn as_info(&self) -> &ResourceInfo<PipelineLayoutId> {
         &self.info
     }
 
-    fn as_info_mut(&mut self) -> &mut ResourceInfo<Self> {
+    fn as_info_mut(&mut self) -> &mut ResourceInfo<PipelineLayoutId> {
         &mut self.info
     }
 }
 
 #[repr(C)]
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "trace", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct BufferBinding {
     pub buffer_id: BufferId,
     pub offset: wgt::BufferAddress,
@@ -763,7 +767,8 @@ pub struct BufferBinding {
 // Note: Duplicated in `wgpu-rs` as `BindingResource`
 // They're different enough that it doesn't make sense to share a common type
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "trace", derive(serde::Serialize))]
+#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
 pub enum BindingResource<'a> {
     Buffer(BufferBinding),
     BufferArray(Cow<'a, [BufferBinding]>),
@@ -850,10 +855,10 @@ pub(crate) fn buffer_binding_type_alignment(
 
 #[derive(Debug)]
 pub struct BindGroup<A: HalApi> {
-    pub(crate) raw: Snatchable<A::BindGroup>,
+    pub(crate) raw: Option<A::BindGroup>,
     pub(crate) device: Arc<Device<A>>,
     pub(crate) layout: Arc<BindGroupLayout<A>>,
-    pub(crate) info: ResourceInfo<BindGroup<A>>,
+    pub(crate) info: ResourceInfo<BindGroupId>,
     pub(crate) used: BindGroupStates<A>,
     pub(crate) used_buffer_ranges: Vec<BufferInitTrackerAction<A>>,
     pub(crate) used_texture_ranges: Vec<TextureInitTrackerAction<A>>,
@@ -891,7 +896,7 @@ impl<A: HalApi> BindGroup<A> {
         for texture in &self.used_texture_ranges {
             let _ = texture.texture.raw(guard)?;
         }
-        self.raw.get(guard)
+        self.raw.as_ref()
     }
     pub(crate) fn validate_dynamic_bindings(
         &self,
@@ -942,16 +947,14 @@ impl<A: HalApi> BindGroup<A> {
     }
 }
 
-impl<A: HalApi> Resource for BindGroup<A> {
+impl<A: HalApi> Resource<BindGroupId> for BindGroup<A> {
     const TYPE: ResourceType = "BindGroup";
 
-    type Marker = crate::id::markers::BindGroup;
-
-    fn as_info(&self) -> &ResourceInfo<Self> {
+    fn as_info(&self) -> &ResourceInfo<BindGroupId> {
         &self.info
     }
 
-    fn as_info_mut(&mut self) -> &mut ResourceInfo<Self> {
+    fn as_info_mut(&mut self) -> &mut ResourceInfo<BindGroupId> {
         &mut self.info
     }
 }

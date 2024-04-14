@@ -9,12 +9,12 @@ use crate::{
     global::Global,
     hal_api::HalApi,
     id::{BufferId, CommandEncoderId, DeviceId, TextureId},
+    identity::GlobalIdentityHandlerFactory,
     init_tracker::{
         has_copy_partial_init_tracker_coverage, MemoryInitKind, TextureInitRange,
         TextureInitTrackerAction,
     },
     resource::{Resource, Texture, TextureErrorDimension},
-    snatch::SnatchGuard,
     track::{TextureSelector, Tracker},
 };
 
@@ -70,7 +70,7 @@ pub enum TransferError {
         dimension: TextureErrorDimension,
         side: CopySide,
     },
-    #[error("Unable to select texture aspect {aspect:?} from format {format:?}")]
+    #[error("Unable to select texture aspect {aspect:?} from fromat {format:?}")]
     InvalidTextureAspect {
         format: wgt::TextureFormat,
         aspect: wgt::TextureAspect,
@@ -253,7 +253,7 @@ pub(crate) fn validate_linear_texture_data(
 ) -> Result<(BufferAddress, BufferAddress), TransferError> {
     // Convert all inputs to BufferAddress (u64) to avoid some of the overflow issues
     // Note: u64 is not always enough to prevent overflow, especially when multiplying
-    // something with a potentially large depth value, so it is preferable to validate
+    // something with a potentially large depth value, so it is preferrable to validate
     // the copy size before calling this function (for example via `validate_texture_copy_range`).
     let copy_width = copy_size.width as BufferAddress;
     let copy_height = copy_size.height as BufferAddress;
@@ -453,7 +453,6 @@ fn handle_texture_init<A: HalApi>(
     copy_texture: &ImageCopyTexture,
     copy_size: &Extent3d,
     texture: &Arc<Texture<A>>,
-    snatch_guard: &SnatchGuard<'_>,
 ) -> Result<(), ClearError> {
     let init_action = TextureInitTrackerAction {
         texture: texture.clone(),
@@ -482,7 +481,6 @@ fn handle_texture_init<A: HalApi>(
                 &mut trackers.textures,
                 &device.alignments,
                 device.zero_buffer.as_ref().unwrap(),
-                snatch_guard,
             )?;
         }
     }
@@ -502,7 +500,6 @@ fn handle_src_texture_init<A: HalApi>(
     source: &ImageCopyTexture,
     copy_size: &Extent3d,
     texture: &Arc<Texture<A>>,
-    snatch_guard: &SnatchGuard<'_>,
 ) -> Result<(), TransferError> {
     handle_texture_init(
         MemoryInitKind::NeedsInitializedMemory,
@@ -513,7 +510,6 @@ fn handle_src_texture_init<A: HalApi>(
         source,
         copy_size,
         texture,
-        snatch_guard,
     )?;
     Ok(())
 }
@@ -530,7 +526,6 @@ fn handle_dst_texture_init<A: HalApi>(
     destination: &ImageCopyTexture,
     copy_size: &Extent3d,
     texture: &Arc<Texture<A>>,
-    snatch_guard: &SnatchGuard<'_>,
 ) -> Result<(), TransferError> {
     // Attention: If we don't write full texture subresources, we need to a full
     // clear first since we don't track subrects. This means that in rare cases
@@ -555,12 +550,11 @@ fn handle_dst_texture_init<A: HalApi>(
         destination,
         copy_size,
         texture,
-        snatch_guard,
     )?;
     Ok(())
 }
 
-impl Global {
+impl<G: GlobalIdentityHandlerFactory> Global<G> {
     pub fn command_encoder_copy_buffer_to_buffer<A: HalApi>(
         &self,
         command_encoder_id: CommandEncoderId,
@@ -786,8 +780,6 @@ impl Global {
 
         let (dst_range, dst_base) = extract_texture_selector(destination, copy_size, &dst_texture)?;
 
-        let snatch_guard = device.snatchable_lock.read();
-
         // Handle texture init *before* dealing with barrier transitions so we
         // have an easier time inserting "immediate-inits" that may be required
         // by prior discards in rare cases.
@@ -799,8 +791,9 @@ impl Global {
             destination,
             copy_size,
             &dst_texture,
-            &snatch_guard,
         )?;
+
+        let snatch_guard = device.snatchable_lock.read();
 
         let (src_buffer, src_pending) = {
             let buffer_guard = hub.buffers.read();
@@ -943,8 +936,6 @@ impl Global {
 
         let (src_range, src_base) = extract_texture_selector(source, copy_size, &src_texture)?;
 
-        let snatch_guard = device.snatchable_lock.read();
-
         // Handle texture init *before* dealing with barrier transitions so we
         // have an easier time inserting "immediate-inits" that may be required
         // by prior discards in rare cases.
@@ -956,8 +947,9 @@ impl Global {
             source,
             copy_size,
             &src_texture,
-            &snatch_guard,
         )?;
+
+        let snatch_guard = device.snatchable_lock.read();
 
         let src_pending = tracker
             .textures
@@ -1161,7 +1153,6 @@ impl Global {
             source,
             copy_size,
             &src_texture,
-            &snatch_guard,
         )?;
         handle_dst_texture_init(
             encoder,
@@ -1171,7 +1162,6 @@ impl Global {
             destination,
             copy_size,
             &dst_texture,
-            &snatch_guard,
         )?;
 
         let src_pending = cmd_buf_data

@@ -233,7 +233,7 @@ impl Context<'_> {
         };
 
         let expressions = if self.is_const {
-            &self.module.global_expressions
+            &self.module.const_expressions
         } else {
             &self.expressions
         };
@@ -330,25 +330,23 @@ impl Context<'_> {
         expr: Handle<Expression>,
     ) -> Result<Handle<Expression>> {
         let meta = self.expressions.get_span(expr);
-        let h = match self.expressions[expr] {
+        Ok(match self.expressions[expr] {
             ref expr @ (Expression::Literal(_)
             | Expression::Constant(_)
-            | Expression::ZeroValue(_)) => {
-                self.module.global_expressions.append(expr.clone(), meta)
-            }
+            | Expression::ZeroValue(_)) => self.module.const_expressions.append(expr.clone(), meta),
             Expression::Compose { ty, ref components } => {
                 let mut components = components.clone();
                 for component in &mut components {
                     *component = self.lift_up_const_expression(*component)?;
                 }
                 self.module
-                    .global_expressions
+                    .const_expressions
                     .append(Expression::Compose { ty, components }, meta)
             }
             Expression::Splat { size, value } => {
                 let value = self.lift_up_const_expression(value)?;
                 self.module
-                    .global_expressions
+                    .const_expressions
                     .append(Expression::Splat { size, value }, meta)
             }
             _ => {
@@ -357,9 +355,6 @@ impl Context<'_> {
                     meta,
                 })
             }
-        };
-        self.global_expression_kind_tracker
-            .insert(h, crate::proc::ExpressionKind::Const);
-        Ok(h)
+        })
     }
 }

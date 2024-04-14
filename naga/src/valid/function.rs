@@ -54,8 +54,8 @@ pub enum LocalVariableError {
     InvalidType(Handle<crate::Type>),
     #[error("Initializer doesn't match the variable type")]
     InitializerType,
-    #[error("Initializer is not a const or override expression")]
-    NonConstOrOverrideInitializer,
+    #[error("Initializer is not const")]
+    NonConstInitializer,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -106,7 +106,7 @@ pub enum FunctionError {
     MissingDefaultCase,
     #[error("Multiple `default` cases are present")]
     MultipleDefaultCases,
-    #[error("The last `switch` case contains a `fallthrough`")]
+    #[error("The last `switch` case contains a `falltrough`")]
     LastCaseFallTrough,
     #[error("The pointer {0:?} doesn't relate to a valid destination for a store")]
     InvalidStorePointer(Handle<crate::Expression>),
@@ -927,7 +927,7 @@ impl super::Validator {
         var: &crate::LocalVariable,
         gctx: crate::proc::GlobalCtx,
         fun_info: &FunctionInfo,
-        local_expr_kind: &crate::proc::ExpressionKindTracker,
+        expression_constness: &crate::proc::ExpressionConstnessTracker,
     ) -> Result<(), LocalVariableError> {
         log::debug!("var {:?}", var);
         let type_info = self
@@ -945,8 +945,8 @@ impl super::Validator {
                 return Err(LocalVariableError::InitializerType);
             }
 
-            if !local_expr_kind.is_const_or_override(init) {
-                return Err(LocalVariableError::NonConstOrOverrideInitializer);
+            if !expression_constness.is_const(init) {
+                return Err(LocalVariableError::NonConstInitializer);
             }
         }
 
@@ -959,14 +959,14 @@ impl super::Validator {
         module: &crate::Module,
         mod_info: &ModuleInfo,
         entry_point: bool,
-        global_expr_kind: &crate::proc::ExpressionKindTracker,
     ) -> Result<FunctionInfo, WithSpan<FunctionError>> {
         let mut info = mod_info.process_function(fun, module, self.flags, self.capabilities)?;
 
-        let local_expr_kind = crate::proc::ExpressionKindTracker::from_arena(&fun.expressions);
+        let expression_constness =
+            crate::proc::ExpressionConstnessTracker::from_arena(&fun.expressions);
 
         for (var_handle, var) in fun.local_variables.iter() {
-            self.validate_local_var(var, module.to_ctx(), &info, &local_expr_kind)
+            self.validate_local_var(var, module.to_ctx(), &info, &expression_constness)
                 .map_err(|source| {
                     FunctionError::LocalVariable {
                         handle: var_handle,
@@ -1032,15 +1032,7 @@ impl super::Validator {
                 self.valid_expression_set.insert(handle.index());
             }
             if self.flags.contains(super::ValidationFlags::EXPRESSIONS) {
-                match self.validate_expression(
-                    handle,
-                    expr,
-                    fun,
-                    module,
-                    &info,
-                    mod_info,
-                    global_expr_kind,
-                ) {
+                match self.validate_expression(handle, expr, fun, module, &info, mod_info) {
                     Ok(stages) => info.available_stages &= stages,
                     Err(source) => {
                         return Err(FunctionError::Expression { handle, source }

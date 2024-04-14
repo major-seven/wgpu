@@ -1,10 +1,10 @@
 /*! Texture Trackers
  *
- * Texture trackers are significantly more complicated than
+ * Texture trackers are signifigantly more complicated than
  * the buffer trackers because textures can be in a "complex"
  * state where each individual subresource can potentially be
  * in a different state from every other subtresource. These
- * complex states are stored separately from the simple states
+ * complex states are stored seperately from the simple states
  * because they are signifignatly more difficult to track and
  * most resources spend the vast majority of their lives in
  * simple states.
@@ -19,11 +19,10 @@
  *   will treat the contents as junk.
 !*/
 
-use super::{
-    range::RangedStates, PendingTransition, PendingTransitionList, ResourceTracker, TrackerIndex,
-};
+use super::{range::RangedStates, PendingTransition, PendingTransitionList, ResourceTracker};
 use crate::{
     hal_api::HalApi,
+    id::{TextureId, TypedId},
     resource::{Resource, Texture, TextureInner},
     snatch::SnatchGuard,
     track::{
@@ -51,6 +50,7 @@ pub struct TextureSelector {
 impl ResourceUses for TextureUses {
     const EXCLUSIVE: Self = Self::EXCLUSIVE;
 
+    type Id = TextureId;
     type Selector = TextureSelector;
 
     fn bits(self) -> u16 {
@@ -171,10 +171,10 @@ impl<A: HalApi> TextureBindGroupState<A> {
     /// Optimize the texture bind group state by sorting it by ID.
     ///
     /// When this list of states is merged into a tracker, the memory
-    /// accesses will be in a constant ascending order.
+    /// accesses will be in a constant assending order.
     pub(crate) fn optimize(&self) {
         let mut textures = self.textures.lock();
-        textures.sort_unstable_by_key(|v| v.texture.as_info().tracker_index());
+        textures.sort_unstable_by_key(|v| v.texture.as_info().id().unzip().0);
     }
 
     /// Returns a list of all textures tracked. May contain duplicates.
@@ -210,7 +210,6 @@ pub(crate) struct TextureStateSet {
     simple: Vec<TextureUses>,
     complex: FastHashMap<usize, ComplexTextureState>,
 }
-
 impl TextureStateSet {
     fn new() -> Self {
         Self {
@@ -233,19 +232,18 @@ impl TextureStateSet {
 #[derive(Debug)]
 pub(crate) struct TextureUsageScope<A: HalApi> {
     set: TextureStateSet,
-    metadata: ResourceMetadata<Texture<A>>,
-}
-
-impl<A: HalApi> Default for TextureUsageScope<A> {
-    fn default() -> Self {
-        Self {
-            set: TextureStateSet::new(),
-            metadata: ResourceMetadata::new(),
-        }
-    }
+    metadata: ResourceMetadata<A, TextureId, Texture<A>>,
 }
 
 impl<A: HalApi> TextureUsageScope<A> {
+    pub fn new() -> Self {
+        Self {
+            set: TextureStateSet::new(),
+
+            metadata: ResourceMetadata::new(),
+        }
+    }
+
     fn tracker_assert_in_bounds(&self, index: usize) {
         self.metadata.tracker_assert_in_bounds(index);
 
@@ -258,11 +256,6 @@ impl<A: HalApi> TextureUsageScope<A> {
         } else {
             true
         });
-    }
-
-    pub fn clear(&mut self) {
-        self.set.clear();
-        self.metadata.clear();
     }
 
     /// Sets the size of all the vectors inside the tracker.
@@ -367,7 +360,7 @@ impl<A: HalApi> TextureUsageScope<A> {
         selector: Option<TextureSelector>,
         new_state: TextureUses,
     ) -> Result<(), UsageConflict> {
-        let index = texture.as_info().tracker_index().as_usize();
+        let index = texture.as_info().id().unzip().0 as usize;
 
         self.tracker_assert_in_bounds(index);
 
@@ -394,14 +387,14 @@ pub(crate) struct TextureTracker<A: HalApi> {
     start_set: TextureStateSet,
     end_set: TextureStateSet,
 
-    metadata: ResourceMetadata<Texture<A>>,
+    metadata: ResourceMetadata<A, TextureId, Texture<A>>,
 
     temp: Vec<PendingTransition<TextureUses>>,
 
     _phantom: PhantomData<A>,
 }
 
-impl<A: HalApi> ResourceTracker for TextureTracker<A> {
+impl<A: HalApi> ResourceTracker<TextureId, Texture<A>> for TextureTracker<A> {
     /// Try to remove the given resource from the tracker iff we have the last reference to the
     /// resource and the epoch matches.
     ///
@@ -409,10 +402,10 @@ impl<A: HalApi> ResourceTracker for TextureTracker<A> {
     ///
     /// If the ID is higher than the length of internal vectors,
     /// false will be returned.
-    fn remove_abandoned(&mut self, index: TrackerIndex) -> bool {
-        let index = index.as_usize();
+    fn remove_abandoned(&mut self, id: TextureId) -> bool {
+        let index = id.unzip().0 as usize;
 
-        if index >= self.metadata.size() {
+        if index > self.metadata.size() {
             return false;
         }
 
@@ -427,10 +420,16 @@ impl<A: HalApi> ResourceTracker for TextureTracker<A> {
                     self.start_set.complex.remove(&index);
                     self.end_set.complex.remove(&index);
                     self.metadata.remove(index);
+                    log::trace!("Texture {:?} is not tracked anymore", id,);
                     return true;
+                } else {
+                    log::trace!(
+                        "Texture {:?} is still referenced from {}",
+                        id,
+                        existing_ref_count
+                    );
+                    return false;
                 }
-
-                return false;
             }
         }
         true
@@ -520,8 +519,8 @@ impl<A: HalApi> TextureTracker<A> {
     ///
     /// If the ID is higher than the length of internal vectors,
     /// the vectors will be extended. A call to set_size is not needed.
-    pub fn insert_single(&mut self, resource: Arc<Texture<A>>, usage: TextureUses) {
-        let index = resource.info.tracker_index().as_usize();
+    pub fn insert_single(&mut self, id: TextureId, resource: Arc<Texture<A>>, usage: TextureUses) {
+        let index = id.unzip().0 as usize;
 
         self.allow_index(index);
 
@@ -562,7 +561,7 @@ impl<A: HalApi> TextureTracker<A> {
         selector: TextureSelector,
         new_state: TextureUses,
     ) -> Option<Drain<'_, PendingTransition<TextureUses>>> {
-        let index = texture.as_info().tracker_index().as_usize();
+        let index = texture.as_info().id().unzip().0 as usize;
 
         self.allow_index(index);
 
@@ -696,7 +695,7 @@ impl<A: HalApi> TextureTracker<A> {
 
         let textures = bind_group_state.textures.lock();
         for t in textures.iter() {
-            let index = t.texture.as_info().tracker_index().as_usize();
+            let index = t.texture.as_info().id().unzip().0 as usize;
             scope.tracker_assert_in_bounds(index);
 
             if unsafe { !scope.metadata.contains_unchecked(index) } {
@@ -729,10 +728,10 @@ impl<A: HalApi> TextureTracker<A> {
     ///
     /// If the ID is higher than the length of internal vectors,
     /// false will be returned.
-    pub fn remove(&mut self, index: TrackerIndex) -> bool {
-        let index = index.as_usize();
+    pub fn remove(&mut self, id: TextureId) -> bool {
+        let index = id.unzip().0 as usize;
 
-        if index >= self.metadata.size() {
+        if index > self.metadata.size() {
             return false;
         }
 
@@ -865,10 +864,10 @@ impl<'a> TextureStateProvider<'a> {
 unsafe fn insert_or_merge<A: HalApi>(
     texture_selector: &TextureSelector,
     current_state_set: &mut TextureStateSet,
-    resource_metadata: &mut ResourceMetadata<Texture<A>>,
+    resource_metadata: &mut ResourceMetadata<A, TextureId, Texture<A>>,
     index: usize,
     state_provider: TextureStateProvider<'_>,
-    metadata_provider: ResourceMetadataProvider<'_, Texture<A>>,
+    metadata_provider: ResourceMetadataProvider<'_, A, TextureId, Texture<A>>,
 ) -> Result<(), UsageConflict> {
     let currently_owned = unsafe { resource_metadata.contains_unchecked(index) };
 
@@ -921,11 +920,11 @@ unsafe fn insert_or_barrier_update<A: HalApi>(
     texture_selector: &TextureSelector,
     start_state: Option<&mut TextureStateSet>,
     current_state_set: &mut TextureStateSet,
-    resource_metadata: &mut ResourceMetadata<Texture<A>>,
+    resource_metadata: &mut ResourceMetadata<A, TextureId, Texture<A>>,
     index: usize,
     start_state_provider: TextureStateProvider<'_>,
     end_state_provider: Option<TextureStateProvider<'_>>,
-    metadata_provider: ResourceMetadataProvider<'_, Texture<A>>,
+    metadata_provider: ResourceMetadataProvider<'_, A, TextureId, Texture<A>>,
     barriers: &mut Vec<PendingTransition<TextureUses>>,
 ) {
     let currently_owned = unsafe { resource_metadata.contains_unchecked(index) };
@@ -974,11 +973,11 @@ unsafe fn insert<A: HalApi>(
     texture_selector: Option<&TextureSelector>,
     start_state: Option<&mut TextureStateSet>,
     end_state: &mut TextureStateSet,
-    resource_metadata: &mut ResourceMetadata<Texture<A>>,
+    resource_metadata: &mut ResourceMetadata<A, TextureId, Texture<A>>,
     index: usize,
     start_state_provider: TextureStateProvider<'_>,
     end_state_provider: Option<TextureStateProvider<'_>>,
-    metadata_provider: ResourceMetadataProvider<'_, Texture<A>>,
+    metadata_provider: ResourceMetadataProvider<'_, A, TextureId, Texture<A>>,
 ) {
     let start_layers = unsafe { start_state_provider.get_state(texture_selector, index) };
     match start_layers {
@@ -1028,7 +1027,7 @@ unsafe fn insert<A: HalApi>(
 
                 log::trace!("\ttex {index}: insert end {state:?}");
 
-                // We only need to insert into the end, as there is guaranteed to be
+                // We only need to insert into the end, as there is guarenteed to be
                 // a start state provider.
                 unsafe { *end_state.simple.get_unchecked_mut(index) = state };
             }
@@ -1041,7 +1040,7 @@ unsafe fn insert<A: HalApi>(
 
                 log::trace!("\ttex {index}: insert end {complex:?}");
 
-                // We only need to insert into the end, as there is guaranteed to be
+                // We only need to insert into the end, as there is guarenteed to be
                 // a start state provider.
                 unsafe { *end_state.simple.get_unchecked_mut(index) = TextureUses::COMPLEX };
                 end_state.complex.insert(index, complex);
@@ -1061,7 +1060,7 @@ unsafe fn merge<A: HalApi>(
     current_state_set: &mut TextureStateSet,
     index: usize,
     state_provider: TextureStateProvider<'_>,
-    metadata_provider: ResourceMetadataProvider<'_, Texture<A>>,
+    metadata_provider: ResourceMetadataProvider<'_, A, TextureId, Texture<A>>,
 ) -> Result<(), UsageConflict> {
     let current_simple = unsafe { current_state_set.simple.get_unchecked_mut(index) };
     let current_state = if *current_simple == TextureUses::COMPLEX {
@@ -1082,7 +1081,11 @@ unsafe fn merge<A: HalApi>(
 
             if invalid_resource_state(merged_state) {
                 return Err(UsageConflict::from_texture(
-                    unsafe { metadata_provider.get_own(index).info.id() },
+                    TextureId::zip(
+                        index as _,
+                        unsafe { metadata_provider.get_epoch(index) },
+                        A::VARIANT,
+                    ),
                     texture_selector.clone(),
                     *current_simple,
                     new_simple,
@@ -1109,7 +1112,11 @@ unsafe fn merge<A: HalApi>(
 
                 if invalid_resource_state(merged_state) {
                     return Err(UsageConflict::from_texture(
-                        unsafe { metadata_provider.get_own(index).info.id() },
+                        TextureId::zip(
+                            index as _,
+                            unsafe { metadata_provider.get_epoch(index) },
+                            A::VARIANT,
+                        ),
                         selector,
                         *current_simple,
                         new_state,
@@ -1150,7 +1157,11 @@ unsafe fn merge<A: HalApi>(
 
                     if invalid_resource_state(merged_state) {
                         return Err(UsageConflict::from_texture(
-                            unsafe { metadata_provider.get_own(index).info.id() },
+                            TextureId::zip(
+                                index as _,
+                                unsafe { metadata_provider.get_epoch(index) },
+                                A::VARIANT,
+                            ),
                             TextureSelector {
                                 mips: mip_id..mip_id + 1,
                                 layers: layers.clone(),
@@ -1191,7 +1202,11 @@ unsafe fn merge<A: HalApi>(
 
                         if invalid_resource_state(merged_state) {
                             return Err(UsageConflict::from_texture(
-                                unsafe { metadata_provider.get_own(index).info.id() },
+                                TextureId::zip(
+                                    index as _,
+                                    unsafe { metadata_provider.get_epoch(index) },
+                                    A::VARIANT,
+                                ),
                                 TextureSelector {
                                     mips: mip_id..mip_id + 1,
                                     layers: layers.clone(),

@@ -60,9 +60,7 @@ impl super::CommandEncoder {
     }
 }
 
-impl crate::CommandEncoder for super::CommandEncoder {
-    type A = super::Api;
-
+impl crate::CommandEncoder<super::Api> for super::CommandEncoder {
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
         if self.free.is_empty() {
             let vk_info = vk::CommandBufferAllocateInfo::builder()
@@ -540,7 +538,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                             .geometry(vk::AccelerationStructureGeometryDataKHR {
                                 triangles: *triangle_data,
                             })
-                            .flags(conv::map_acceleration_structure_geometry_flags(
+                            .flags(conv::map_acceleration_structure_geomety_flags(
                                 triangles.flags,
                             ));
 
@@ -572,7 +570,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
                             .geometry(vk::AccelerationStructureGeometryDataKHR {
                                 aabbs: *aabbs_data,
                             })
-                            .flags(conv::map_acceleration_structure_geometry_flags(aabb.flags));
+                            .flags(conv::map_acceleration_structure_geomety_flags(aabb.flags));
 
                         geometries.push(*geometry);
                         ranges.push(*range);

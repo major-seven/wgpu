@@ -100,7 +100,6 @@ async fn run(_path: Option<String>) {
         layout: Some(&pipeline_layout),
         module: &shader,
         entry_point: "main",
-        constants: &Default::default(),
     });
 
     log::info!("Wgpu context set up.");
@@ -170,7 +169,7 @@ pub fn main() {
             .init();
 
         let path = std::env::args()
-            .nth(2)
+            .nth(1)
             .unwrap_or_else(|| "please_don't_git_push_me.png".to_string());
         pollster::block_on(run(Some(path)));
     }

@@ -40,14 +40,10 @@ fn get_z_offset(target: u32, base: &crate::TextureCopyBase) -> u32 {
 impl super::Queue {
     /// Performs a manual shader clear, used as a workaround for a clearing bug on mesa
     unsafe fn perform_shader_clear(&self, gl: &glow::Context, draw_buffer: u32, color: [f32; 4]) {
-        let shader_clear = self
-            .shader_clear_program
-            .as_ref()
-            .expect("shader_clear_program should always be set if the workaround is enabled");
-        unsafe { gl.use_program(Some(shader_clear.program)) };
+        unsafe { gl.use_program(Some(self.shader_clear_program)) };
         unsafe {
             gl.uniform_4_f32(
-                Some(&shader_clear.color_uniform_location),
+                Some(&self.shader_clear_program_color_uniform_location),
                 color[0],
                 color[1],
                 color[2],
@@ -1748,13 +1744,10 @@ impl super::Queue {
     }
 }
 
-impl crate::Queue for super::Queue {
-    type A = super::Api;
-
+impl crate::Queue<super::Api> for super::Queue {
     unsafe fn submit(
         &self,
         command_buffers: &[&super::CommandBuffer],
-        _surface_textures: &[&super::Texture],
         signal_fence: Option<(&mut super::Fence, crate::FenceValue)>,
     ) -> Result<(), crate::DeviceError> {
         let shared = Arc::clone(&self.shared);

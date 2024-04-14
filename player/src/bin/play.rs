@@ -3,7 +3,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    use player::GlobalPlay as _;
+    use player::{GlobalPlay as _, IdentityPassThroughFactory};
     use wgc::{device::trace, gfx_select};
 
     use std::{
@@ -49,7 +49,11 @@ fn main() {
         .build(&event_loop)
         .unwrap();
 
-    let global = wgc::global::Global::new("player", wgt::InstanceDescriptor::default());
+    let global = wgc::global::Global::new(
+        "player",
+        IdentityPassThroughFactory,
+        wgt::InstanceDescriptor::default(),
+    );
     let mut command_buffer_id_manager = wgc::identity::IdentityManager::new();
 
     #[cfg(feature = "winit")]
@@ -57,7 +61,7 @@ fn main() {
         global.instance_create_surface(
             window.display_handle().unwrap().into(),
             window.window_handle().unwrap().into(),
-            Some(wgc::id::Id::zip(0, 1, wgt::Backend::Empty)),
+            wgc::id::TypedId::zip(0, 1, wgt::Backend::Empty),
         )
     }
     .unwrap();
@@ -75,19 +79,22 @@ fn main() {
                         #[cfg(not(feature = "winit"))]
                         compatible_surface: None,
                     },
-                    wgc::instance::AdapterInputs::IdSet(&[wgc::id::AdapterId::zip(0, 0, backend)]),
+                    wgc::instance::AdapterInputs::IdSet(
+                        &[wgc::id::TypedId::zip(0, 0, backend)],
+                        |id| id.backend(),
+                    ),
                 )
                 .expect("Unable to find an adapter for selected backend");
 
             let info = gfx_select!(adapter => global.adapter_get_info(adapter)).unwrap();
             log::info!("Picked '{}'", info.name);
-            let id = wgc::id::Id::zip(1, 0, backend);
+            let id = wgc::id::TypedId::zip(1, 0, backend);
             let (_, _, error) = gfx_select!(adapter => global.adapter_request_device(
                 adapter,
                 &desc,
                 None,
-                Some(id),
-                Some(id.into_queue_id())
+                id,
+                id
             ));
             if let Some(e) = error {
                 panic!("{:?}", e);

@@ -34,6 +34,9 @@ with optional span info, representing a series of statements executed in order. 
 `EntryPoint`s or `Function` is a `Block`, and `Statement` has a
 [`Block`][Statement::Block] variant.
 
+If the `clone` feature is enabled, [`Arena`], [`UniqueArena`], [`Type`], [`TypeInner`],
+[`Constant`], [`Function`], [`EntryPoint`] and [`Module`] can be cloned.
+
 ## Arenas
 
 To improve translator performance and reduce memory usage, most structures are
@@ -172,7 +175,7 @@ tree.
 A Naga *constant expression* is one of the following [`Expression`]
 variants, whose operands (if any) are also constant expressions:
 - [`Literal`]
-- [`Constant`], for [`Constant`]s
+- [`Constant`], for [`Constant`s][const_type] whose [`override`] is [`None`]
 - [`ZeroValue`], for fixed-size types
 - [`Compose`]
 - [`Access`]
@@ -191,7 +194,8 @@ A constant expression can be evaluated at module translation time.
 ## Override expressions
 
 A Naga *override expression* is the same as a [constant expression],
-except that it is also allowed to reference other [`Override`]s.
+except that it is also allowed to refer to [`Constant`s][const_type]
+whose [`override`] is something other than [`None`].
 
 An override expression can be evaluated at pipeline creation time.
 
@@ -234,6 +238,10 @@ An override expression can be evaluated at pipeline creation time.
 [`Math`]: Expression::Math
 [`As`]: Expression::As
 
+[const_type]: Constant
+[`override`]: Constant::override
+[`None`]: Override::None
+
 [constant expression]: index.html#constant-expressions
 */
 
@@ -244,8 +252,7 @@ An override expression can be evaluated at pipeline creation time.
     clippy::collapsible_if,
     clippy::derive_partial_eq_without_eq,
     clippy::needless_borrowed_reference,
-    clippy::single_match,
-    clippy::enum_variant_names
+    clippy::single_match
 )]
 #![warn(
     trivial_casts,
@@ -451,10 +458,6 @@ pub enum VectorSize {
     Quad = 4,
 }
 
-impl VectorSize {
-    const MAX: usize = Self::Quad as u8 as usize;
-}
-
 /// Primitive type for a scalar.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
@@ -483,7 +486,7 @@ pub enum ScalarKind {
 }
 
 /// Characteristics of a scalar type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serialize", derive(Serialize))]
 #[cfg_attr(feature = "deserialize", derive(Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
@@ -680,7 +683,8 @@ pub enum ImageClass {
 }
 
 /// A data type declared in the module.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "clone", derive(Clone))]
 #[cfg_attr(feature = "serialize", derive(Serialize))]
 #[cfg_attr(feature = "deserialize", derive(Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
@@ -692,7 +696,8 @@ pub struct Type {
 }
 
 /// Enum with additional information, depending on the kind of type.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "clone", derive(Clone))]
 #[cfg_attr(feature = "serialize", derive(Serialize))]
 #[cfg_attr(feature = "deserialize", derive(Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
@@ -758,7 +763,7 @@ pub enum TypeInner {
         space: AddressSpace,
     },
 
-    /// Homogeneous list of elements.
+    /// Homogenous list of elements.
     ///
     /// The `base` type must be a [`SIZED`], [`DATA`] type.
     ///
@@ -877,44 +882,47 @@ pub enum Literal {
     F32(f32),
     U32(u32),
     I32(i32),
-    U64(u64),
     I64(i64),
     Bool(bool),
     AbstractInt(i64),
     AbstractFloat(f64),
 }
 
-/// Pipeline-overridable constant.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "clone", derive(Clone))]
 #[cfg_attr(feature = "serialize", derive(Serialize))]
 #[cfg_attr(feature = "deserialize", derive(Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
-pub struct Override {
-    pub name: Option<String>,
-    /// Pipeline Constant ID.
-    pub id: Option<u16>,
-    pub ty: Handle<Type>,
-
-    /// The default value of the pipeline-overridable constant.
-    ///
-    /// This [`Handle`] refers to [`Module::global_expressions`], not
-    /// any [`Function::expressions`] arena.
-    pub init: Option<Handle<Expression>>,
+pub enum Override {
+    None,
+    ByName,
+    ByNameOrId(u32),
 }
 
 /// Constant value.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "clone", derive(Clone))]
 #[cfg_attr(feature = "serialize", derive(Serialize))]
 #[cfg_attr(feature = "deserialize", derive(Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 pub struct Constant {
     pub name: Option<String>,
+    pub r#override: Override,
     pub ty: Handle<Type>,
 
     /// The value of the constant.
     ///
-    /// This [`Handle`] refers to [`Module::global_expressions`], not
+    /// This [`Handle`] refers to [`Module::const_expressions`], not
     /// any [`Function::expressions`] arena.
+    ///
+    /// If [`override`] is [`None`], then this must be a Naga
+    /// [constant expression]. Otherwise, this may be a Naga
+    /// [override expression] or [constant expression].
+    ///
+    /// [`override`]: Constant::override
+    /// [`None`]: Override::None
+    /// [constant expression]: index.html#constant-expressions
+    /// [override expression]: index.html#override-expressions
     pub init: Handle<Expression>,
 }
 
@@ -980,7 +988,7 @@ pub struct GlobalVariable {
     pub ty: Handle<Type>,
     /// Initial value for this variable.
     ///
-    /// Expression handle lives in global_expressions
+    /// Expression handle lives in const_expressions
     pub init: Option<Handle<Expression>>,
 }
 
@@ -998,7 +1006,7 @@ pub struct LocalVariable {
     ///
     /// This handle refers to this `LocalVariable`'s function's
     /// [`expressions`] arena, but it is required to be an evaluated
-    /// override expression.
+    /// constant expression.
     ///
     /// [`expressions`]: Function::expressions
     pub init: Option<Handle<Expression>>,
@@ -1245,18 +1253,15 @@ pub enum SampleLevel {
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 pub enum ImageQuery {
     /// Get the size at the specified level.
-    ///
-    /// The return value is a `u32` for 1D images, and a `vecN<u32>`
-    /// for an image with dimensions N > 2.
     Size {
         /// If `None`, the base level is considered.
         level: Option<Handle<Expression>>,
     },
-    /// Get the number of mipmap levels, a `u32`.
+    /// Get the number of mipmap levels.
     NumLevels,
-    /// Get the number of array layers, a `u32`.
+    /// Get the number of array layers.
     NumLayers,
-    /// Get the number of samples, a `u32`.
+    /// Get the number of samples.
     NumSamples,
 }
 
@@ -1303,8 +1308,6 @@ pub enum Expression {
     Literal(Literal),
     /// Constant value.
     Constant(Handle<Constant>),
-    /// Pipeline-overridable constant.
-    Override(Handle<Override>),
     /// Zero value of a type.
     ZeroValue(Handle<Type>),
     /// Composite expression.
@@ -1430,7 +1433,7 @@ pub enum Expression {
         gather: Option<SwizzleComponent>,
         coordinate: Handle<Expression>,
         array_index: Option<Handle<Expression>>,
-        /// Expression handle lives in global_expressions
+        /// Expression handle lives in const_expressions
         offset: Option<Handle<Expression>>,
         level: SampleLevel,
         depth_ref: Option<Handle<Expression>>,
@@ -1678,10 +1681,6 @@ pub enum Statement {
     /// A block containing more statements, to be executed sequentially.
     Block(Block),
     /// Conditionally executes one of two blocks, based on the value of the condition.
-    ///
-    /// Naga IR does not have "phi" instructions. If you need to use
-    /// values computed in an `accept` or `reject` block after the `If`,
-    /// store them in a [`LocalVariable`].
     If {
         condition: Handle<Expression>, //bool
         accept: Block,
@@ -1700,10 +1699,6 @@ pub enum Statement {
     /// multiple values, like `case 1: case 2: case 3: { ... }`. This is
     /// represented in the IR as a series of fallthrough cases with empty
     /// bodies, except for the last.
-    ///
-    /// Naga IR does not have "phi" instructions. If you need to use
-    /// values computed in a [`SwitchCase::body`] block after the `Switch`,
-    /// store them in a [`LocalVariable`].
     ///
     /// [`value`]: SwitchCase::value
     /// [`body`]: SwitchCase::body
@@ -1738,10 +1733,6 @@ pub enum Statement {
     /// top of body as usual. The `break_if` expression corresponds to a "break
     /// if" statement in WGSL, or a loop whose back edge is an
     /// `OpBranchConditional` instruction in SPIR-V.
-    ///
-    /// Naga IR does not have "phi" instructions. If you need to use
-    /// values computed in a `body` or `continuing` block after the
-    /// `Loop`, store them in a [`LocalVariable`].
     ///
     /// [`Break`]: Statement::Break
     /// [`Continue`]: Statement::Continue
@@ -1903,7 +1894,8 @@ pub struct FunctionResult {
 }
 
 /// A function defined in the module.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
+#[cfg_attr(feature = "clone", derive(Clone))]
 #[cfg_attr(feature = "serialize", derive(Serialize))]
 #[cfg_attr(feature = "deserialize", derive(Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
@@ -1967,7 +1959,8 @@ pub struct Function {
 /// [`Location`]: Binding::Location
 /// [`function`]: EntryPoint::function
 /// [`stage`]: EntryPoint::stage
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+#[cfg_attr(feature = "clone", derive(Clone))]
 #[cfg_attr(feature = "serialize", derive(Serialize))]
 #[cfg_attr(feature = "deserialize", derive(Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
@@ -1991,7 +1984,8 @@ pub struct EntryPoint {
 /// These cannot be spelled in WGSL source.
 ///
 /// Stored in [`SpecialTypes::predeclared_types`] and created by [`Module::generate_predeclared_type`].
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "clone", derive(Clone))]
 #[cfg_attr(feature = "serialize", derive(Serialize))]
 #[cfg_attr(feature = "deserialize", derive(Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
@@ -2008,7 +2002,8 @@ pub enum PredeclaredType {
 }
 
 /// Set of special types that can be optionally generated by the frontends.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
+#[cfg_attr(feature = "clone", derive(Clone))]
 #[cfg_attr(feature = "serialize", derive(Serialize))]
 #[cfg_attr(feature = "deserialize", derive(Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
@@ -2043,7 +2038,8 @@ pub struct SpecialTypes {
 /// Alternatively, you can load an existing shader using one of the [available front ends][front].
 ///
 /// When finished, you can export modules using one of the [available backends][back].
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
+#[cfg_attr(feature = "clone", derive(Clone))]
 #[cfg_attr(feature = "serialize", derive(Serialize))]
 #[cfg_attr(feature = "deserialize", derive(Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
@@ -2054,8 +2050,6 @@ pub struct Module {
     pub special_types: SpecialTypes,
     /// Arena for the constants defined in this module.
     pub constants: Arena<Constant>,
-    /// Arena for the pipeline-overridable constants defined in this module.
-    pub overrides: Arena<Override>,
     /// Arena for the global variables defined in this module.
     pub global_variables: Arena<GlobalVariable>,
     /// [Constant expressions] and [override expressions] used by this module.
@@ -2065,7 +2059,7 @@ pub struct Module {
     ///
     /// [Constant expressions]: index.html#constant-expressions
     /// [override expressions]: index.html#override-expressions
-    pub global_expressions: Arena<Expression>,
+    pub const_expressions: Arena<Expression>,
     /// Arena for the functions defined in this module.
     ///
     /// Each function must appear in this arena strictly before all its callers.

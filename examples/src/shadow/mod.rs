@@ -500,7 +500,6 @@ impl crate::framework::Example for Example {
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: "vs_bake",
-                    constants: &Default::default(),
                     buffers: &[vb_desc.clone()],
                 },
                 fragment: None,
@@ -633,7 +632,6 @@ impl crate::framework::Example for Example {
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: "vs_main",
-                    constants: &Default::default(),
                     buffers: &[vb_desc],
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -643,7 +641,6 @@ impl crate::framework::Example for Example {
                     } else {
                         "fs_main_without_storage"
                     },
-                    constants: &Default::default(),
                     targets: &[Some(config.view_formats[0].into())],
                 }),
                 primitive: wgpu::PrimitiveState {

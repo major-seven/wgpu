@@ -19,8 +19,6 @@ const SPECIAL_OTHER: &str = "other";
 
 pub(crate) const MODF_FUNCTION: &str = "naga_modf";
 pub(crate) const FREXP_FUNCTION: &str = "naga_frexp";
-pub(crate) const EXTRACT_BITS_FUNCTION: &str = "naga_extractBits";
-pub(crate) const INSERT_BITS_FUNCTION: &str = "naga_insertBits";
 
 struct EpStructMember {
     name: String,
@@ -127,7 +125,14 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 self.need_bake_expressions.insert(fun_handle);
             }
 
-            if let Expression::Math { fun, arg, .. } = *expr {
+            if let Expression::Math {
+                fun,
+                arg,
+                arg1,
+                arg2,
+                arg3,
+            } = *expr
+            {
                 match fun {
                     crate::MathFunction::Asinh
                     | crate::MathFunction::Acosh
@@ -143,6 +148,17 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                     | crate::MathFunction::Pack4x8snorm
                     | crate::MathFunction::Pack4x8unorm => {
                         self.need_bake_expressions.insert(arg);
+                    }
+                    crate::MathFunction::ExtractBits => {
+                        self.need_bake_expressions.insert(arg);
+                        self.need_bake_expressions.insert(arg1.unwrap());
+                        self.need_bake_expressions.insert(arg2.unwrap());
+                    }
+                    crate::MathFunction::InsertBits => {
+                        self.need_bake_expressions.insert(arg);
+                        self.need_bake_expressions.insert(arg1.unwrap());
+                        self.need_bake_expressions.insert(arg2.unwrap());
+                        self.need_bake_expressions.insert(arg3.unwrap());
                     }
                     crate::MathFunction::CountLeadingZeros => {
                         let inner = info[fun_handle].ty.inner_with(&module.types);
@@ -168,10 +184,6 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
         module: &Module,
         module_info: &valid::ModuleInfo,
     ) -> Result<super::ReflectionInfo, Error> {
-        if !module.overrides.is_empty() {
-            return Err(Error::Override);
-        }
-
         self.reset(module);
 
         // Write special constants, if needed
@@ -237,7 +249,7 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
 
         self.write_special_functions(module)?;
 
-        self.write_wrapped_compose_functions(module, &module.global_expressions)?;
+        self.write_wrapped_compose_functions(module, &module.const_expressions)?;
 
         // Write all named constants
         let mut constants = module
@@ -2001,7 +2013,7 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
         self.write_possibly_const_expression(
             module,
             expr,
-            &module.global_expressions,
+            &module.const_expressions,
             |writer, expr| writer.write_const_expression(module, expr),
         )
     }
@@ -2026,7 +2038,6 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 crate::Literal::F32(value) => write!(self.out, "{value:?}")?,
                 crate::Literal::U32(value) => write!(self.out, "{}u", value)?,
                 crate::Literal::I32(value) => write!(self.out, "{}", value)?,
-                crate::Literal::U64(value) => write!(self.out, "{}uL", value)?,
                 crate::Literal::I64(value) => write!(self.out, "{}L", value)?,
                 crate::Literal::Bool(value) => write!(self.out, "{}", value)?,
                 crate::Literal::AbstractInt(_) | crate::Literal::AbstractFloat(_) => {
@@ -2144,7 +2155,6 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                     |writer, expr| writer.write_expr(module, expr, func_ctx),
                 )?;
             }
-            Expression::Override(_) => return Err(Error::Override),
             // All of the multiplication can be expressed as `mul`,
             // except vector * vector, which needs to use the "*" operator.
             Expression::Binary {
@@ -2259,7 +2269,7 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                         index: u32,
                     ) -> BackendResult {
                         match *resolved {
-                            // We specifically lift the ValuePointer to this case. While `[0]` is valid
+                            // We specifcally lift the ValuePointer to this case. While `[0]` is valid
                             // HLSL for any vector behind a value pointer, FXC completely miscompiles
                             // it and generates completely nonsensical DXBC.
                             //
@@ -2557,7 +2567,7 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 convert,
             } => {
                 let inner = func_ctx.resolve_type(expr, &module.types);
-                let close_paren = match convert {
+                match convert {
                     Some(dst_width) => {
                         let scalar = crate::Scalar {
                             kind,
@@ -2590,21 +2600,13 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                                 )));
                             }
                         };
-                        true
                     }
                     None => {
-                        if inner.scalar_width() == Some(64) {
-                            false
-                        } else {
-                            write!(self.out, "{}(", kind.to_hlsl_cast(),)?;
-                            true
-                        }
+                        write!(self.out, "{}(", kind.to_hlsl_cast(),)?;
                     }
-                };
-                self.write_expr(module, expr, func_ctx)?;
-                if close_paren {
-                    write!(self.out, ")")?;
                 }
+                self.write_expr(module, expr, func_ctx)?;
+                write!(self.out, ")")?;
             }
             Expression::Math {
                 fun,
@@ -2618,6 +2620,8 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 enum Function {
                     Asincosh { is_sin: bool },
                     Atanh,
+                    ExtractBits,
+                    InsertBits,
                     Pack2x16float,
                     Pack2x16snorm,
                     Pack2x16unorm,
@@ -2701,8 +2705,8 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                     Mf::ReverseBits => Function::MissingIntOverload("reversebits"),
                     Mf::FindLsb => Function::MissingIntReturnType("firstbitlow"),
                     Mf::FindMsb => Function::MissingIntReturnType("firstbithigh"),
-                    Mf::ExtractBits => Function::Regular(EXTRACT_BITS_FUNCTION),
-                    Mf::InsertBits => Function::Regular(INSERT_BITS_FUNCTION),
+                    Mf::ExtractBits => Function::ExtractBits,
+                    Mf::InsertBits => Function::InsertBits,
                     // Data Packing
                     Mf::Pack2x16float => Function::Pack2x16float,
                     Mf::Pack2x16snorm => Function::Pack2x16snorm,
@@ -2737,6 +2741,70 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                         write!(self.out, ") / (1.0 - ")?;
                         self.write_expr(module, arg, func_ctx)?;
                         write!(self.out, "))")?;
+                    }
+                    Function::ExtractBits => {
+                        // e: T,
+                        // offset: u32,
+                        // count: u32
+                        // T is u32 or i32 or vecN<u32> or vecN<i32>
+                        if let (Some(offset), Some(count)) = (arg1, arg2) {
+                            let scalar_width: u8 = 32;
+                            // Works for signed and unsigned
+                            // (count == 0 ? 0 : (e << (32 - count - offset)) >> (32 - count))
+                            write!(self.out, "(")?;
+                            self.write_expr(module, count, func_ctx)?;
+                            write!(self.out, " == 0 ? 0 : (")?;
+                            self.write_expr(module, arg, func_ctx)?;
+                            write!(self.out, " << ({scalar_width} - ")?;
+                            self.write_expr(module, count, func_ctx)?;
+                            write!(self.out, " - ")?;
+                            self.write_expr(module, offset, func_ctx)?;
+                            write!(self.out, ")) >> ({scalar_width} - ")?;
+                            self.write_expr(module, count, func_ctx)?;
+                            write!(self.out, "))")?;
+                        }
+                    }
+                    Function::InsertBits => {
+                        // e: T,
+                        // newbits: T,
+                        // offset: u32,
+                        // count: u32
+                        // returns T
+                        // T is i32, u32, vecN<i32>, or vecN<u32>
+                        if let (Some(newbits), Some(offset), Some(count)) = (arg1, arg2, arg3) {
+                            let scalar_width: u8 = 32;
+                            let scalar_max: u32 = 0xFFFFFFFF;
+                            // mask = ((0xFFFFFFFFu >> (32 - count)) << offset)
+                            // (count == 0 ? e : ((e & ~mask) | ((newbits << offset) & mask)))
+                            write!(self.out, "(")?;
+                            self.write_expr(module, count, func_ctx)?;
+                            write!(self.out, " == 0 ? ")?;
+                            self.write_expr(module, arg, func_ctx)?;
+                            write!(self.out, " : ")?;
+                            write!(self.out, "(")?;
+                            self.write_expr(module, arg, func_ctx)?;
+                            write!(self.out, " & ~")?;
+                            // mask
+                            write!(self.out, "(({scalar_max}u >> ({scalar_width}u - ")?;
+                            self.write_expr(module, count, func_ctx)?;
+                            write!(self.out, ")) << ")?;
+                            self.write_expr(module, offset, func_ctx)?;
+                            write!(self.out, ")")?;
+                            // end mask
+                            write!(self.out, ") | ((")?;
+                            self.write_expr(module, newbits, func_ctx)?;
+                            write!(self.out, " << ")?;
+                            self.write_expr(module, offset, func_ctx)?;
+                            write!(self.out, ") & ")?;
+                            // // mask
+                            write!(self.out, "(({scalar_max}u >> ({scalar_width}u - ")?;
+                            self.write_expr(module, count, func_ctx)?;
+                            write!(self.out, ")) << ")?;
+                            self.write_expr(module, offset, func_ctx)?;
+                            write!(self.out, ")")?;
+                            // // end mask
+                            write!(self.out, "))")?;
+                        }
                     }
                     Function::Pack2x16float => {
                         write!(self.out, "(f32tof16(")?;
@@ -2876,15 +2944,9 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                         }
                         write!(self.out, ")")?
                     }
-                    // These overloads are only missing on FXC, so this is only needed for 32bit types,
-                    // as non-32bit types are DXC only.
                     Function::MissingIntOverload(fun_name) => {
-                        let scalar_kind = func_ctx.resolve_type(arg, &module.types).scalar();
-                        if let Some(crate::Scalar {
-                            kind: ScalarKind::Sint,
-                            width: 4,
-                        }) = scalar_kind
-                        {
+                        let scalar_kind = func_ctx.resolve_type(arg, &module.types).scalar_kind();
+                        if let Some(ScalarKind::Sint) = scalar_kind {
                             write!(self.out, "asint({fun_name}(asuint(")?;
                             self.write_expr(module, arg, func_ctx)?;
                             write!(self.out, ")))")?;
@@ -2894,15 +2956,9 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                             write!(self.out, ")")?;
                         }
                     }
-                    // These overloads are only missing on FXC, so this is only needed for 32bit types,
-                    // as non-32bit types are DXC only.
                     Function::MissingIntReturnType(fun_name) => {
-                        let scalar_kind = func_ctx.resolve_type(arg, &module.types).scalar();
-                        if let Some(crate::Scalar {
-                            kind: ScalarKind::Sint,
-                            width: 4,
-                        }) = scalar_kind
-                        {
+                        let scalar_kind = func_ctx.resolve_type(arg, &module.types).scalar_kind();
+                        if let Some(ScalarKind::Sint) = scalar_kind {
                             write!(self.out, "asint({fun_name}(")?;
                             self.write_expr(module, arg, func_ctx)?;
                             write!(self.out, "))")?;
@@ -2921,38 +2977,23 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                                     crate::VectorSize::Quad => ".xxxx",
                                 };
 
-                                let scalar_width_bits = scalar.width * 8;
-
-                                if scalar.kind == ScalarKind::Uint || scalar.width != 4 {
-                                    write!(
-                                        self.out,
-                                        "min(({scalar_width_bits}u){s}, firstbitlow("
-                                    )?;
+                                if let ScalarKind::Uint = scalar.kind {
+                                    write!(self.out, "min((32u){s}, firstbitlow(")?;
                                     self.write_expr(module, arg, func_ctx)?;
                                     write!(self.out, "))")?;
                                 } else {
-                                    // This is only needed for the FXC path, on 32bit signed integers.
-                                    write!(
-                                        self.out,
-                                        "asint(min(({scalar_width_bits}u){s}, firstbitlow("
-                                    )?;
+                                    write!(self.out, "asint(min((32u){s}, firstbitlow(")?;
                                     self.write_expr(module, arg, func_ctx)?;
                                     write!(self.out, ")))")?;
                                 }
                             }
                             TypeInner::Scalar(scalar) => {
-                                let scalar_width_bits = scalar.width * 8;
-
-                                if scalar.kind == ScalarKind::Uint || scalar.width != 4 {
-                                    write!(self.out, "min({scalar_width_bits}u, firstbitlow(")?;
+                                if let ScalarKind::Uint = scalar.kind {
+                                    write!(self.out, "min(32u, firstbitlow(")?;
                                     self.write_expr(module, arg, func_ctx)?;
                                     write!(self.out, "))")?;
                                 } else {
-                                    // This is only needed for the FXC path, on 32bit signed integers.
-                                    write!(
-                                        self.out,
-                                        "asint(min({scalar_width_bits}u, firstbitlow("
-                                    )?;
+                                    write!(self.out, "asint(min(32u, firstbitlow(")?;
                                     self.write_expr(module, arg, func_ctx)?;
                                     write!(self.out, ")))")?;
                                 }
@@ -2971,47 +3012,30 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                                     crate::VectorSize::Quad => ".xxxx",
                                 };
 
-                                // scalar width - 1
-                                let constant = scalar.width * 8 - 1;
-
-                                if scalar.kind == ScalarKind::Uint {
-                                    write!(self.out, "(({constant}u){s} - firstbithigh(")?;
+                                if let ScalarKind::Uint = scalar.kind {
+                                    write!(self.out, "((31u){s} - firstbithigh(")?;
                                     self.write_expr(module, arg, func_ctx)?;
                                     write!(self.out, "))")?;
                                 } else {
-                                    let conversion_func = match scalar.width {
-                                        4 => "asint",
-                                        _ => "",
-                                    };
                                     write!(self.out, "(")?;
                                     self.write_expr(module, arg, func_ctx)?;
                                     write!(
                                         self.out,
-                                        " < (0){s} ? (0){s} : ({constant}){s} - {conversion_func}(firstbithigh("
+                                        " < (0){s} ? (0){s} : (31){s} - asint(firstbithigh("
                                     )?;
                                     self.write_expr(module, arg, func_ctx)?;
                                     write!(self.out, ")))")?;
                                 }
                             }
                             TypeInner::Scalar(scalar) => {
-                                // scalar width - 1
-                                let constant = scalar.width * 8 - 1;
-
                                 if let ScalarKind::Uint = scalar.kind {
-                                    write!(self.out, "({constant}u - firstbithigh(")?;
+                                    write!(self.out, "(31u - firstbithigh(")?;
                                     self.write_expr(module, arg, func_ctx)?;
                                     write!(self.out, "))")?;
                                 } else {
-                                    let conversion_func = match scalar.width {
-                                        4 => "asint",
-                                        _ => "",
-                                    };
                                     write!(self.out, "(")?;
                                     self.write_expr(module, arg, func_ctx)?;
-                                    write!(
-                                        self.out,
-                                        " < 0 ? 0 : {constant} - {conversion_func}(firstbithigh("
-                                    )?;
+                                    write!(self.out, " < 0 ? 0 : 31 - asint(firstbithigh(")?;
                                     self.write_expr(module, arg, func_ctx)?;
                                     write!(self.out, ")))")?;
                                 }

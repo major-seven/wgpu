@@ -220,17 +220,9 @@ impl super::Device {
             multiview: context.multiview,
         };
 
-        let (module, info) = naga::back::pipeline_constants::process_overrides(
-            &stage.module.naga.module,
-            &stage.module.naga.info,
-            stage.constants,
-        )
-        .map_err(|e| {
-            let msg = format!("{e}");
-            crate::PipelineError::Linkage(map_naga_stage(naga_stage), msg)
-        })?;
-
-        let entry_point_index = module
+        let shader = &stage.module.naga;
+        let entry_point_index = shader
+            .module
             .entry_points
             .iter()
             .position(|ep| ep.name.as_str() == stage.entry_point)
@@ -257,8 +249,8 @@ impl super::Device {
         let mut output = String::new();
         let mut writer = glsl::Writer::new(
             &mut output,
-            &module,
-            &info,
+            &shader.module,
+            &shader.info,
             &context.layout.naga_options,
             &pipeline_options,
             policies,
@@ -277,8 +269,8 @@ impl super::Device {
 
         context.consume_reflection(
             gl,
-            &module,
-            info.get_entry_point(entry_point_index),
+            &shader.module,
+            shader.info.get_entry_point(entry_point_index),
             reflection_info,
             naga_stage,
             program,
@@ -491,9 +483,7 @@ impl super::Device {
     }
 }
 
-impl crate::Device for super::Device {
-    type A = super::Api;
-
+impl crate::Device<super::Api> for super::Device {
     unsafe fn exit(self, queue: super::Queue) {
         let gl = &self.shared.context.lock();
         unsafe { gl.delete_vertex_array(self.main_vao) };
@@ -1133,10 +1123,8 @@ impl crate::Device for super::Device {
                 !0;
                 bg_layout
                     .entries
-                    .iter()
-                    .map(|b| b.binding)
-                    .max()
-                    .map_or(0, |idx| idx as usize + 1)
+                    .last()
+                    .map_or(0, |b| b.binding as usize + 1)
             ]
             .into_boxed_slice();
 
@@ -1189,16 +1177,7 @@ impl crate::Device for super::Device {
     ) -> Result<super::BindGroup, crate::DeviceError> {
         let mut contents = Vec::new();
 
-        let layout_and_entry_iter = desc.entries.iter().map(|entry| {
-            let layout = desc
-                .layout
-                .entries
-                .iter()
-                .find(|layout_entry| layout_entry.binding == entry.binding)
-                .expect("internal error: no layout entry found with binding slot");
-            (entry, layout)
-        });
-        for (entry, layout) in layout_and_entry_iter {
+        for (entry, layout) in desc.entries.iter().zip(desc.layout.entries.iter()) {
             let binding = match layout.ty {
                 wgt::BindingType::Buffer { .. } => {
                     let bb = &desc.buffers[entry.resource_index as usize];

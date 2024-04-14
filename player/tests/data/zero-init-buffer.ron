@@ -1,5 +1,5 @@
 (
-    features: ["MAPPABLE_PRIMARY_BUFFERS"],
+    features: 0x0000_0004_0000_0000, // MAPPABLE_PRIMARY_BUFFERS
     expectations: [
         // Ensuring that mapping zero-inits buffers.
         (
@@ -133,8 +133,7 @@
                 layout: Some(Id(0, 1, Empty)),
                 stage: (
                     module: Id(0, 1, Empty),
-                    entry_point: None,
-                    constants: {},
+                    entry_point: "main",
                 ),
             ),
         ),

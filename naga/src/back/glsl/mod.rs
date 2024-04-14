@@ -146,7 +146,7 @@ impl Version {
         }
     }
 
-    /// Returns true if targeting WebGL
+    /// Returns true if targetting WebGL
     const fn is_webgl(&self) -> bool {
         match *self {
             Version::Desktop(_) => false,
@@ -178,7 +178,7 @@ impl Version {
     /// Note: `location=` for vertex inputs and fragment outputs is supported
     /// unconditionally for GLES 300.
     fn supports_explicit_locations(&self) -> bool {
-        *self >= Version::Desktop(420) || *self >= Version::new_gles(310)
+        *self >= Version::Desktop(410) || *self >= Version::new_gles(310)
     }
 
     fn supports_early_depth_test(&self) -> bool {
@@ -282,7 +282,7 @@ impl Default for Options {
 }
 
 /// A subset of options meant to be changed per pipeline.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 #[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
 pub struct PipelineOptions {
@@ -340,9 +340,9 @@ pub struct TextureMapping {
 ///
 /// Push constants are emulated using traditional uniforms in OpenGL.
 ///
-/// These are composed of a set of primitives (scalar, vector, matrix) that
+/// These are composed of a set of primatives (scalar, vector, matrix) that
 /// are given names. Because they are not backed by the concept of a buffer,
-/// we must do the work of calculating the offset of each primitive in the
+/// we must do the work of calculating the offset of each primative in the
 /// push constant block.
 #[derive(Debug, Clone)]
 pub struct PushConstantItem {
@@ -394,11 +394,11 @@ impl IdGenerator {
     }
 }
 
-/// Assorted options needed for generating varyings.
+/// Assorted options needed for generting varyings.
 #[derive(Clone, Copy)]
 struct VaryingOptions {
     output: bool,
-    targeting_webgl: bool,
+    targetting_webgl: bool,
     draw_parameters: bool,
 }
 
@@ -406,7 +406,7 @@ impl VaryingOptions {
     const fn from_writer_options(options: &Options, output: bool) -> Self {
         Self {
             output,
-            targeting_webgl: options.version.is_webgl(),
+            targetting_webgl: options.version.is_webgl(),
             draw_parameters: options.writer_flags.contains(WriterFlags::DRAW_PARAMETERS),
         }
     }
@@ -497,8 +497,6 @@ pub enum Error {
     ImageMultipleSamplers,
     #[error("{0}")]
     Custom(String),
-    #[error("overrides should not be present at this stage")]
-    Override,
 }
 
 /// Binary operation with a different logic on the GLSL side.
@@ -567,10 +565,6 @@ impl<'a, W: Write> Writer<'a, W> {
         pipeline_options: &'a PipelineOptions,
         policies: proc::BoundsCheckPolicies,
     ) -> Result<Self, Error> {
-        if !module.overrides.is_empty() {
-            return Err(Error::Override);
-        }
-
         // Check if the requested version is supported
         if !options.version.is_supported() {
             log::error!("Version {}", options.version);
@@ -1296,14 +1290,7 @@ impl<'a, W: Write> Writer<'a, W> {
 
             let inner = expr_info.ty.inner_with(&self.module.types);
 
-            if let Expression::Math {
-                fun,
-                arg,
-                arg1,
-                arg2,
-                ..
-            } = *expr
-            {
+            if let Expression::Math { fun, arg, arg1, .. } = *expr {
                 match fun {
                     crate::MathFunction::Dot => {
                         // if the expression is a Dot product with integer arguments,
@@ -1317,14 +1304,6 @@ impl<'a, W: Write> Writer<'a, W> {
                                 _ => {}
                             }
                         }
-                    }
-                    crate::MathFunction::ExtractBits => {
-                        // Only argument 1 is re-used.
-                        self.need_bake_expressions.insert(arg1.unwrap());
-                    }
-                    crate::MathFunction::InsertBits => {
-                        // Only argument 2 is re-used.
-                        self.need_bake_expressions.insert(arg2.unwrap());
                     }
                     crate::MathFunction::CountLeadingZeros => {
                         if let Some(crate::ScalarKind::Sint) = inner.scalar_kind() {
@@ -1860,7 +1839,7 @@ impl<'a, W: Write> Writer<'a, W> {
         size: usize,
         ctx: &back::FunctionCtx,
     ) -> BackendResult {
-        // Write parentheses around the dot product expression to prevent operators
+        // Write parantheses around the dot product expression to prevent operators
         // with different precedences from applying earlier.
         write!(self.out, "(")?;
 
@@ -2408,7 +2387,7 @@ impl<'a, W: Write> Writer<'a, W> {
     fn write_const_expr(&mut self, expr: Handle<crate::Expression>) -> BackendResult {
         self.write_possibly_const_expr(
             expr,
-            &self.module.global_expressions,
+            &self.module.const_expressions,
             |expr| &self.info[expr],
             |writer, expr| writer.write_const_expr(expr),
         )
@@ -2460,9 +2439,6 @@ impl<'a, W: Write> Writer<'a, W> {
                     crate::Literal::I32(value) => write!(self.out, "{}", value)?,
                     crate::Literal::Bool(value) => write!(self.out, "{}", value)?,
                     crate::Literal::I64(_) => {
-                        return Err(Error::Custom("GLSL has no 64-bit integer type".into()));
-                    }
-                    crate::Literal::U64(_) => {
                         return Err(Error::Custom("GLSL has no 64-bit integer type".into()));
                     }
                     crate::Literal::AbstractInt(_) | crate::Literal::AbstractFloat(_) => {
@@ -2542,7 +2518,6 @@ impl<'a, W: Write> Writer<'a, W> {
                     |writer, expr| writer.write_expr(expr, ctx),
                 )?;
             }
-            Expression::Override(_) => return Err(Error::Override),
             // `Access` is applied to arrays, vectors and matrices and is written as indexing
             Expression::Access { base, index } => {
                 self.write_expr(base, ctx)?;
@@ -3163,29 +3138,7 @@ impl<'a, W: Write> Writer<'a, W> {
                     Mf::Abs => "abs",
                     Mf::Min => "min",
                     Mf::Max => "max",
-                    Mf::Clamp => {
-                        let scalar_kind = ctx
-                            .resolve_type(arg, &self.module.types)
-                            .scalar_kind()
-                            .unwrap();
-                        match scalar_kind {
-                            crate::ScalarKind::Float => "clamp",
-                            // Clamp is undefined if min > max. In practice this means it can use a median-of-three
-                            // instruction to determine the value. This is fine according to the WGSL spec for float
-                            // clamp, but integer clamp _must_ use min-max. As such we write out min/max.
-                            _ => {
-                                write!(self.out, "min(max(")?;
-                                self.write_expr(arg, ctx)?;
-                                write!(self.out, ", ")?;
-                                self.write_expr(arg1.unwrap(), ctx)?;
-                                write!(self.out, "), ")?;
-                                self.write_expr(arg2.unwrap(), ctx)?;
-                                write!(self.out, ")")?;
-
-                                return Ok(());
-                            }
-                        }
-                    }
+                    Mf::Clamp => "clamp",
                     Mf::Saturate => {
                         write!(self.out, "clamp(")?;
 
@@ -3400,59 +3353,8 @@ impl<'a, W: Write> Writer<'a, W> {
                     }
                     Mf::CountOneBits => "bitCount",
                     Mf::ReverseBits => "bitfieldReverse",
-                    Mf::ExtractBits => {
-                        // The behavior of ExtractBits is undefined when offset + count > bit_width. We need
-                        // to first sanitize the offset and count first. If we don't do this, AMD and Intel chips
-                        // will return out-of-spec values if the extracted range is not within the bit width.
-                        //
-                        // This encodes the exact formula specified by the wgsl spec, without temporary values:
-                        // https://gpuweb.github.io/gpuweb/wgsl/#extractBits-unsigned-builtin
-                        //
-                        // w = sizeof(x) * 8
-                        // o = min(offset, w)
-                        // c = min(count, w - o)
-                        //
-                        // bitfieldExtract(x, o, c)
-                        //
-                        // extract_bits(e, min(offset, w), min(count, w - min(offset, w))))
-                        let scalar_bits = ctx
-                            .resolve_type(arg, &self.module.types)
-                            .scalar_width()
-                            .unwrap();
-
-                        write!(self.out, "bitfieldExtract(")?;
-                        self.write_expr(arg, ctx)?;
-                        write!(self.out, ", int(min(")?;
-                        self.write_expr(arg1.unwrap(), ctx)?;
-                        write!(self.out, ", {scalar_bits}u)), int(min(",)?;
-                        self.write_expr(arg2.unwrap(), ctx)?;
-                        write!(self.out, ", {scalar_bits}u - min(")?;
-                        self.write_expr(arg1.unwrap(), ctx)?;
-                        write!(self.out, ", {scalar_bits}u))))")?;
-
-                        return Ok(());
-                    }
-                    Mf::InsertBits => {
-                        // InsertBits has the same considerations as ExtractBits above
-                        let scalar_bits = ctx
-                            .resolve_type(arg, &self.module.types)
-                            .scalar_width()
-                            .unwrap();
-
-                        write!(self.out, "bitfieldInsert(")?;
-                        self.write_expr(arg, ctx)?;
-                        write!(self.out, ", ")?;
-                        self.write_expr(arg1.unwrap(), ctx)?;
-                        write!(self.out, ", int(min(")?;
-                        self.write_expr(arg2.unwrap(), ctx)?;
-                        write!(self.out, ", {scalar_bits}u)), int(min(",)?;
-                        self.write_expr(arg3.unwrap(), ctx)?;
-                        write!(self.out, ", {scalar_bits}u - min(")?;
-                        self.write_expr(arg2.unwrap(), ctx)?;
-                        write!(self.out, ", {scalar_bits}u))))")?;
-
-                        return Ok(());
-                    }
+                    Mf::ExtractBits => "bitfieldExtract",
+                    Mf::InsertBits => "bitfieldInsert",
                     Mf::FindLsb => "findLSB",
                     Mf::FindMsb => "findMSB",
                     // data packing
@@ -3876,11 +3778,11 @@ impl<'a, W: Write> Writer<'a, W> {
             // Sampled images inherit the policy from the user passed policies
             crate::ImageClass::Sampled { .. } => ("texelFetch", self.policies.image_load),
             crate::ImageClass::Storage { .. } => {
-                // OpenGL ES 3.1 mentions in Chapter "8.22 Texture Image Loads and Stores" that:
+                // OpenGL ES 3.1 mentiones in Chapter "8.22 Texture Image Loads and Stores" that:
                 // "Invalid image loads will return a vector where the value of R, G, and B components
                 // is 0 and the value of the A component is undefined."
                 //
-                // OpenGL 4.2 Core mentions in Chapter "3.9.20 Texture Image Loads and Stores" that:
+                // OpenGL 4.2 Core mentiones in Chapter "3.9.20 Texture Image Loads and Stores" that:
                 // "Invalid image loads will return zero."
                 //
                 // So, we only inject bounds checks for ES
@@ -3913,7 +3815,7 @@ impl<'a, W: Write> Writer<'a, W> {
             // expressions so we can be sure that after we test a
             // condition it will be true for the next ones
 
-            // Write parentheses around the ternary operator to prevent problems with
+            // Write parantheses around the ternary operator to prevent problems with
             // expressions emitted before or after it having more precedence
             write!(self.out, "(",)?;
 
@@ -3937,7 +3839,7 @@ impl<'a, W: Write> Writer<'a, W> {
             }
 
             // We now need to write the size checks for the coordinates and array index
-            // first we write the comparison function in case the image is 1D non arrayed
+            // first we write the comparation function in case the image is 1D non arrayed
             // (and no 1D to 2D hack was needed) we are comparing scalars so the less than
             // operator will suffice, but otherwise we'll be comparing two vectors so we'll
             // need to use the `lessThan` function but it returns a vector of booleans (one
@@ -3964,7 +3866,7 @@ impl<'a, W: Write> Writer<'a, W> {
                 // coordinates from the image size.
                 write!(self.out, ", ")?;
             } else {
-                // If we didn't use it (ie. 1D images) we perform the comparison
+                // If we didn't use it (ie. 1D images) we perform the comparsion
                 // using the less than operator.
                 write!(self.out, " < ")?;
             }
@@ -4083,7 +3985,7 @@ impl<'a, W: Write> Writer<'a, W> {
             // Get the kind of the output value.
             let kind = match class {
                 // Only sampled images can reach here since storage images
-                // don't need bounds checks and depth images aren't implemented
+                // don't need bounds checks and depth images aren't implmented
                 crate::ImageClass::Sampled { kind, .. } => kind,
                 _ => unreachable!(),
             };
@@ -4099,7 +4001,7 @@ impl<'a, W: Write> Writer<'a, W> {
             self.write_zero_init_scalar(kind)?;
             // Close the zero value constructor
             write!(self.out, ")")?;
-            // Close the parentheses surrounding our ternary
+            // Close the parantheses surrounding our ternary
             write!(self.out, ")")?;
         }
 
@@ -4457,7 +4359,7 @@ const fn glsl_built_in(built_in: crate::BuiltIn, options: VaryingOptions) -> &'s
                 "gl_FragCoord"
             }
         }
-        Bi::ViewIndex if options.targeting_webgl => "int(gl_ViewID_OVR)",
+        Bi::ViewIndex if options.targetting_webgl => "int(gl_ViewID_OVR)",
         Bi::ViewIndex => "gl_ViewIndex",
         // vertex
         Bi::BaseInstance => "uint(gl_BaseInstance)",
@@ -4468,7 +4370,7 @@ const fn glsl_built_in(built_in: crate::BuiltIn, options: VaryingOptions) -> &'s
             if options.draw_parameters {
                 "(uint(gl_InstanceID) + uint(gl_BaseInstanceARB))"
             } else {
-                // Must match FIRST_INSTANCE_BINDING
+                // Must match FISRT_INSTANCE_BINDING
                 "(uint(gl_InstanceID) + naga_vs_first_instance)"
             }
         }

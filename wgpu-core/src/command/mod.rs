@@ -27,7 +27,10 @@ use crate::snatch::SnatchGuard;
 use crate::init_tracker::BufferInitTrackerAction;
 use crate::resource::{Resource, ResourceInfo, ResourceType};
 use crate::track::{Tracker, UsageScope};
-use crate::{api_log, global::Global, hal_api::HalApi, id, resource_log, Label};
+use crate::{
+    api_log, global::Global, hal_api::HalApi, id, identity::GlobalIdentityHandlerFactory,
+    resource_log, Label,
+};
 
 use hal::CommandEncoder as _;
 use parking_lot::Mutex;
@@ -82,7 +85,7 @@ impl<A: HalApi> CommandEncoder<A> {
         }
     }
 
-    pub(crate) fn open(&mut self) -> Result<&mut A::CommandEncoder, DeviceError> {
+    fn open(&mut self) -> Result<&mut A::CommandEncoder, DeviceError> {
         if !self.is_open {
             self.is_open = true;
             let label = self.label.as_deref();
@@ -100,7 +103,7 @@ impl<A: HalApi> CommandEncoder<A> {
     }
 }
 
-pub(crate) struct BakedCommands<A: HalApi> {
+pub struct BakedCommands<A: HalApi> {
     pub(crate) encoder: A::CommandEncoder,
     pub(crate) list: Vec<A::CommandBuffer>,
     pub(crate) trackers: Tracker<A>,
@@ -137,7 +140,7 @@ pub struct CommandBuffer<A: HalApi> {
     pub(crate) device: Arc<Device<A>>,
     limits: wgt::Limits,
     support_clear_texture: bool,
-    pub(crate) info: ResourceInfo<CommandBuffer<A>>,
+    pub(crate) info: ResourceInfo<CommandBufferId>,
     pub(crate) data: Mutex<Option<CommandBufferMutable<A>>>,
 }
 
@@ -174,7 +177,6 @@ impl<A: HalApi> CommandBuffer<A> {
                     .as_ref()
                     .unwrap_or(&String::from("<CommandBuffer>"))
                     .as_str(),
-                None,
             ),
             data: Mutex::new(Some(CommandBufferMutable {
                 encoder: CommandEncoder {
@@ -253,7 +255,7 @@ impl<A: HalApi> CommandBuffer<A> {
         id: id::CommandEncoderId,
     ) -> Result<Arc<Self>, CommandEncoderError> {
         let storage = hub.command_buffers.read();
-        match storage.get(id.into_command_buffer_id()) {
+        match storage.get(id) {
             Ok(cmd_buf) => match cmd_buf.data.lock().as_ref().unwrap().status {
                 CommandEncoderStatus::Recording => Ok(cmd_buf.clone()),
                 CommandEncoderStatus::Finished => Err(CommandEncoderError::NotRecording),
@@ -286,22 +288,22 @@ impl<A: HalApi> CommandBuffer<A> {
     }
 
     pub(crate) fn from_arc_into_baked(self: Arc<Self>) -> BakedCommands<A> {
-        let mut command_buffer = Arc::into_inner(self)
-            .expect("CommandBuffer cannot be destroyed because is still in use");
-        command_buffer.extract_baked_commands()
+        if let Some(mut command_buffer) = Arc::into_inner(self) {
+            command_buffer.extract_baked_commands()
+        } else {
+            panic!("CommandBuffer cannot be destroyed because is still in use");
+        }
     }
 }
 
-impl<A: HalApi> Resource for CommandBuffer<A> {
+impl<A: HalApi> Resource<CommandBufferId> for CommandBuffer<A> {
     const TYPE: ResourceType = "CommandBuffer";
 
-    type Marker = crate::id::markers::CommandBuffer;
-
-    fn as_info(&self) -> &ResourceInfo<Self> {
+    fn as_info(&self) -> &ResourceInfo<CommandBufferId> {
         &self.info
     }
 
-    fn as_info_mut(&mut self) -> &mut ResourceInfo<Self> {
+    fn as_info_mut(&mut self) -> &mut ResourceInfo<CommandBufferId> {
         &mut self.info
     }
 
@@ -336,7 +338,14 @@ pub struct BasePassRef<'a, C> {
 /// [`InsertDebugMarker`]: RenderCommand::InsertDebugMarker
 #[doc(hidden)]
 #[derive(Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "serial-pass", feature = "trace"),
+    derive(serde::Serialize)
+)]
+#[cfg_attr(
+    any(feature = "serial-pass", feature = "replay"),
+    derive(serde::Deserialize)
+)]
 pub struct BasePass<C> {
     pub label: Option<String>,
 
@@ -406,7 +415,7 @@ pub enum CommandEncoderError {
     Device(#[from] DeviceError),
 }
 
-impl Global {
+impl<G: GlobalIdentityHandlerFactory> Global<G> {
     pub fn command_encoder_finish<A: HalApi>(
         &self,
         encoder_id: id::CommandEncoderId,
@@ -416,7 +425,7 @@ impl Global {
 
         let hub = A::hub(self);
 
-        let error = match hub.command_buffers.get(encoder_id.into_command_buffer_id()) {
+        let error = match hub.command_buffers.get(encoder_id) {
             Ok(cmd_buf) => {
                 let mut cmd_buf_data = cmd_buf.data.lock();
                 let cmd_buf_data = cmd_buf_data.as_mut().unwrap();
@@ -442,7 +451,7 @@ impl Global {
             Err(_) => Some(CommandEncoderError::Invalid),
         };
 
-        (encoder_id.into_command_buffer_id(), error)
+        (encoder_id, error)
     }
 
     pub fn command_encoder_push_debug_group<A: HalApi>(
@@ -698,7 +707,7 @@ impl PrettyError for PassErrorScope {
         // This error is not in the error chain, only notes are needed
         match *self {
             Self::Pass(id) => {
-                fmt.command_buffer_label(&id.into_command_buffer_id());
+                fmt.command_buffer_label(&id);
             }
             Self::SetBindGroup(id) => {
                 fmt.bind_group_label(&id);

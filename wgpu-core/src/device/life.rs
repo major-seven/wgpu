@@ -6,14 +6,17 @@ use crate::{
         DeviceError, DeviceLostClosure,
     },
     hal_api::HalApi,
-    id,
+    id::{
+        self, BindGroupId, BindGroupLayoutId, BufferId, ComputePipelineId, PipelineLayoutId,
+        QuerySetId, RenderBundleId, RenderPipelineId, SamplerId, StagingBufferId, TextureId,
+        TextureViewId,
+    },
     pipeline::{ComputePipeline, RenderPipeline},
     resource::{
         self, Buffer, DestroyedBuffer, DestroyedTexture, QuerySet, Resource, Sampler,
         StagingBuffer, Texture, TextureView,
     },
-    snatch::SnatchGuard,
-    track::{ResourceTracker, Tracker, TrackerIndex},
+    track::{ResourceTracker, Tracker},
     FastHashMap, SubmissionIndex,
 };
 use smallvec::SmallVec;
@@ -25,20 +28,20 @@ use thiserror::Error;
 /// A struct that keeps lists of resources that are no longer needed by the user.
 #[derive(Default)]
 pub(crate) struct ResourceMaps<A: HalApi> {
-    pub buffers: FastHashMap<TrackerIndex, Arc<Buffer<A>>>,
-    pub staging_buffers: FastHashMap<TrackerIndex, Arc<StagingBuffer<A>>>,
-    pub textures: FastHashMap<TrackerIndex, Arc<Texture<A>>>,
-    pub texture_views: FastHashMap<TrackerIndex, Arc<TextureView<A>>>,
-    pub samplers: FastHashMap<TrackerIndex, Arc<Sampler<A>>>,
-    pub bind_groups: FastHashMap<TrackerIndex, Arc<BindGroup<A>>>,
-    pub bind_group_layouts: FastHashMap<TrackerIndex, Arc<BindGroupLayout<A>>>,
-    pub render_pipelines: FastHashMap<TrackerIndex, Arc<RenderPipeline<A>>>,
-    pub compute_pipelines: FastHashMap<TrackerIndex, Arc<ComputePipeline<A>>>,
-    pub pipeline_layouts: FastHashMap<TrackerIndex, Arc<PipelineLayout<A>>>,
-    pub render_bundles: FastHashMap<TrackerIndex, Arc<RenderBundle<A>>>,
-    pub query_sets: FastHashMap<TrackerIndex, Arc<QuerySet<A>>>,
-    pub destroyed_buffers: FastHashMap<TrackerIndex, Arc<DestroyedBuffer<A>>>,
-    pub destroyed_textures: FastHashMap<TrackerIndex, Arc<DestroyedTexture<A>>>,
+    pub buffers: FastHashMap<BufferId, Arc<Buffer<A>>>,
+    pub staging_buffers: FastHashMap<StagingBufferId, Arc<StagingBuffer<A>>>,
+    pub textures: FastHashMap<TextureId, Arc<Texture<A>>>,
+    pub texture_views: FastHashMap<TextureViewId, Arc<TextureView<A>>>,
+    pub samplers: FastHashMap<SamplerId, Arc<Sampler<A>>>,
+    pub bind_groups: FastHashMap<BindGroupId, Arc<BindGroup<A>>>,
+    pub bind_group_layouts: FastHashMap<BindGroupLayoutId, Arc<BindGroupLayout<A>>>,
+    pub render_pipelines: FastHashMap<RenderPipelineId, Arc<RenderPipeline<A>>>,
+    pub compute_pipelines: FastHashMap<ComputePipelineId, Arc<ComputePipeline<A>>>,
+    pub pipeline_layouts: FastHashMap<PipelineLayoutId, Arc<PipelineLayout<A>>>,
+    pub render_bundles: FastHashMap<RenderBundleId, Arc<RenderBundle<A>>>,
+    pub query_sets: FastHashMap<QuerySetId, Arc<QuerySet<A>>>,
+    pub destroyed_buffers: FastHashMap<BufferId, Arc<DestroyedBuffer<A>>>,
+    pub destroyed_textures: FastHashMap<TextureId, Arc<DestroyedTexture<A>>>,
 }
 
 impl<A: HalApi> ResourceMaps<A> {
@@ -273,29 +276,25 @@ impl<A: HalApi> LifetimeTracker<A> {
         for res in temp_resources {
             match res {
                 TempResource::Buffer(raw) => {
-                    last_resources
-                        .buffers
-                        .insert(raw.as_info().tracker_index(), raw);
+                    last_resources.buffers.insert(raw.as_info().id(), raw);
                 }
                 TempResource::StagingBuffer(raw) => {
                     last_resources
                         .staging_buffers
-                        .insert(raw.as_info().tracker_index(), raw);
+                        .insert(raw.as_info().id(), raw);
                 }
                 TempResource::DestroyedBuffer(destroyed) => {
                     last_resources
                         .destroyed_buffers
-                        .insert(destroyed.tracker_index, destroyed);
+                        .insert(destroyed.id, destroyed);
                 }
                 TempResource::Texture(raw) => {
-                    last_resources
-                        .textures
-                        .insert(raw.as_info().tracker_index(), raw);
+                    last_resources.textures.insert(raw.as_info().id(), raw);
                 }
                 TempResource::DestroyedTexture(destroyed) => {
                     last_resources
                         .destroyed_textures
-                        .insert(destroyed.tracker_index, destroyed);
+                        .insert(destroyed.id, destroyed);
                 }
             }
         }
@@ -310,15 +309,13 @@ impl<A: HalApi> LifetimeTracker<A> {
     }
 
     pub fn post_submit(&mut self) {
-        for v in self.future_suspected_buffers.drain(..) {
-            self.suspected_resources
-                .buffers
-                .insert(v.as_info().tracker_index(), v);
+        for v in self.future_suspected_buffers.drain(..).take(1) {
+            self.suspected_resources.buffers.insert(v.as_info().id(), v);
         }
-        for v in self.future_suspected_textures.drain(..) {
+        for v in self.future_suspected_textures.drain(..).take(1) {
             self.suspected_resources
                 .textures
-                .insert(v.as_info().tracker_index(), v);
+                .insert(v.as_info().id(), v);
         }
     }
 
@@ -389,27 +386,19 @@ impl<A: HalApi> LifetimeTracker<A> {
         if let Some(resources) = resources {
             match temp_resource {
                 TempResource::Buffer(raw) => {
-                    resources.buffers.insert(raw.as_info().tracker_index(), raw);
+                    resources.buffers.insert(raw.as_info().id(), raw);
                 }
                 TempResource::StagingBuffer(raw) => {
-                    resources
-                        .staging_buffers
-                        .insert(raw.as_info().tracker_index(), raw);
+                    resources.staging_buffers.insert(raw.as_info().id(), raw);
                 }
                 TempResource::DestroyedBuffer(destroyed) => {
-                    resources
-                        .destroyed_buffers
-                        .insert(destroyed.tracker_index, destroyed);
+                    resources.destroyed_buffers.insert(destroyed.id, destroyed);
                 }
                 TempResource::Texture(raw) => {
-                    resources
-                        .textures
-                        .insert(raw.as_info().tracker_index(), raw);
+                    resources.textures.insert(raw.as_info().id(), raw);
                 }
                 TempResource::DestroyedTexture(destroyed) => {
-                    resources
-                        .destroyed_textures
-                        .insert(destroyed.tracker_index, destroyed);
+                    resources.destroyed_textures.insert(destroyed.id, destroyed);
                 }
             }
         }
@@ -420,7 +409,7 @@ impl<A: HalApi> LifetimeTracker<A> {
             Some(active) => {
                 active.work_done_closures.push(closure);
             }
-            // We must defer the closure until all previously occurring map_async closures
+            // We must defer the closure until all previously occuring map_async closures
             // have fired. This is required by the spec.
             None => {
                 self.work_done_closures.push(closure);
@@ -430,28 +419,29 @@ impl<A: HalApi> LifetimeTracker<A> {
 }
 
 impl<A: HalApi> LifetimeTracker<A> {
-    fn triage_resources<R>(
-        resources_map: &mut FastHashMap<TrackerIndex, Arc<R>>,
+    fn triage_resources<Id, R>(
+        resources_map: &mut FastHashMap<Id, Arc<R>>,
         active: &mut [ActiveSubmission<A>],
-        trackers: &mut impl ResourceTracker,
-        get_resource_map: impl Fn(&mut ResourceMaps<A>) -> &mut FastHashMap<TrackerIndex, Arc<R>>,
+        trackers: &mut impl ResourceTracker<Id, R>,
+        get_resource_map: impl Fn(&mut ResourceMaps<A>) -> &mut FastHashMap<Id, Arc<R>>,
     ) -> Vec<Arc<R>>
     where
-        R: Resource,
+        Id: id::TypedId,
+        R: Resource<Id>,
     {
         let mut removed_resources = Vec::new();
-        resources_map.retain(|&index, resource| {
+        resources_map.retain(|&id, resource| {
             let submit_index = resource.as_info().submission_index();
             let non_referenced_resources = active
                 .iter_mut()
                 .find(|a| a.index == submit_index)
                 .map(|a| &mut a.last_resources);
 
-            let is_removed = trackers.remove_abandoned(index);
+            let is_removed = trackers.remove_abandoned(id);
             if is_removed {
                 removed_resources.push(resource.clone());
-                if let Some(resources) = non_referenced_resources {
-                    get_resource_map(resources).insert(index, resource.clone());
+                if let Some(ressources) = non_referenced_resources {
+                    get_resource_map(ressources).insert(id, resource.clone());
                 }
             }
             !is_removed
@@ -470,29 +460,27 @@ impl<A: HalApi> LifetimeTracker<A> {
         );
         removed_resources.drain(..).for_each(|bundle| {
             for v in bundle.used.buffers.write().drain_resources() {
-                self.suspected_resources
-                    .buffers
-                    .insert(v.as_info().tracker_index(), v);
+                self.suspected_resources.buffers.insert(v.as_info().id(), v);
             }
             for v in bundle.used.textures.write().drain_resources() {
                 self.suspected_resources
                     .textures
-                    .insert(v.as_info().tracker_index(), v);
+                    .insert(v.as_info().id(), v);
             }
             for v in bundle.used.bind_groups.write().drain_resources() {
                 self.suspected_resources
                     .bind_groups
-                    .insert(v.as_info().tracker_index(), v);
+                    .insert(v.as_info().id(), v);
             }
             for v in bundle.used.render_pipelines.write().drain_resources() {
                 self.suspected_resources
                     .render_pipelines
-                    .insert(v.as_info().tracker_index(), v);
+                    .insert(v.as_info().id(), v);
             }
             for v in bundle.used.query_sets.write().drain_resources() {
                 self.suspected_resources
                     .query_sets
-                    .insert(v.as_info().tracker_index(), v);
+                    .insert(v.as_info().id(), v);
             }
         });
         self
@@ -509,30 +497,27 @@ impl<A: HalApi> LifetimeTracker<A> {
         );
         removed_resource.drain(..).for_each(|bind_group| {
             for v in bind_group.used.buffers.drain_resources() {
-                self.suspected_resources
-                    .buffers
-                    .insert(v.as_info().tracker_index(), v);
+                self.suspected_resources.buffers.insert(v.as_info().id(), v);
             }
             for v in bind_group.used.textures.drain_resources() {
                 self.suspected_resources
                     .textures
-                    .insert(v.as_info().tracker_index(), v);
+                    .insert(v.as_info().id(), v);
             }
             for v in bind_group.used.views.drain_resources() {
                 self.suspected_resources
                     .texture_views
-                    .insert(v.as_info().tracker_index(), v);
+                    .insert(v.as_info().id(), v);
             }
             for v in bind_group.used.samplers.drain_resources() {
                 self.suspected_resources
                     .samplers
-                    .insert(v.as_info().tracker_index(), v);
+                    .insert(v.as_info().id(), v);
             }
 
-            self.suspected_resources.bind_group_layouts.insert(
-                bind_group.layout.as_info().tracker_index(),
-                bind_group.layout.clone(),
-            );
+            self.suspected_resources
+                .bind_group_layouts
+                .insert(bind_group.layout.as_info().id(), bind_group.layout.clone());
         });
         self
     }
@@ -540,12 +525,20 @@ impl<A: HalApi> LifetimeTracker<A> {
     fn triage_suspected_texture_views(&mut self, trackers: &Mutex<Tracker<A>>) -> &mut Self {
         let mut trackers = trackers.lock();
         let resource_map = &mut self.suspected_resources.texture_views;
-        Self::triage_resources(
+        let mut removed_resources = Self::triage_resources(
             resource_map,
             self.active.as_mut_slice(),
             &mut trackers.views,
             |maps| &mut maps.texture_views,
         );
+        removed_resources.drain(..).for_each(|texture_view| {
+            let mut lock = texture_view.parent.write();
+            if let Some(parent_texture) = lock.take() {
+                self.suspected_resources
+                    .textures
+                    .insert(parent_texture.as_info().id(), parent_texture);
+            }
+        });
         self
     }
 
@@ -621,7 +614,7 @@ impl<A: HalApi> LifetimeTracker<A> {
         );
         removed_resources.drain(..).for_each(|compute_pipeline| {
             self.suspected_resources.pipeline_layouts.insert(
-                compute_pipeline.layout.as_info().tracker_index(),
+                compute_pipeline.layout.as_info().id(),
                 compute_pipeline.layout.clone(),
             );
         });
@@ -639,7 +632,7 @@ impl<A: HalApi> LifetimeTracker<A> {
         );
         removed_resources.drain(..).for_each(|render_pipeline| {
             self.suspected_resources.pipeline_layouts.insert(
-                render_pipeline.layout.as_info().tracker_index(),
+                render_pipeline.layout.as_info().id(),
                 render_pipeline.layout.clone(),
             );
         });
@@ -658,7 +651,7 @@ impl<A: HalApi> LifetimeTracker<A> {
             for bgl in &pipeline_layout.bind_group_layouts {
                 self.suspected_resources
                     .bind_group_layouts
-                    .insert(bgl.as_info().tracker_index(), bgl.clone());
+                    .insert(bgl.as_info().id(), bgl.clone());
             }
         });
         self
@@ -781,7 +774,6 @@ impl<A: HalApi> LifetimeTracker<A> {
         &mut self,
         raw: &A::Device,
         trackers: &Mutex<Tracker<A>>,
-        snatch_guard: &SnatchGuard,
     ) -> Vec<super::BufferMapPendingClosure> {
         if self.ready_to_map.is_empty() {
             return Vec::new();
@@ -790,14 +782,14 @@ impl<A: HalApi> LifetimeTracker<A> {
             Vec::with_capacity(self.ready_to_map.len());
 
         for buffer in self.ready_to_map.drain(..) {
-            let tracker_index = buffer.info.tracker_index();
+            let buffer_id = buffer.info.id();
             let is_removed = {
                 let mut trackers = trackers.lock();
-                trackers.buffers.remove_abandoned(tracker_index)
+                trackers.buffers.remove_abandoned(buffer_id)
             };
             if is_removed {
                 *buffer.map_state.lock() = resource::BufferMapState::Idle;
-                log::trace!("Buffer ready to map {tracker_index:?} is not tracked anymore");
+                log::trace!("Buffer ready to map {:?} is not tracked anymore", buffer_id);
             } else {
                 let mapping = match std::mem::replace(
                     &mut *buffer.map_state.lock(),
@@ -815,17 +807,10 @@ impl<A: HalApi> LifetimeTracker<A> {
                     _ => panic!("No pending mapping."),
                 };
                 let status = if mapping.range.start != mapping.range.end {
-                    log::debug!("Buffer {tracker_index:?} map state -> Active");
+                    log::debug!("Buffer {:?} map state -> Active", buffer_id);
                     let host = mapping.op.host;
                     let size = mapping.range.end - mapping.range.start;
-                    match super::map_buffer(
-                        raw,
-                        &buffer,
-                        mapping.range.start,
-                        size,
-                        host,
-                        snatch_guard,
-                    ) {
+                    match super::map_buffer(raw, &buffer, mapping.range.start, size, host) {
                         Ok(ptr) => {
                             *buffer.map_state.lock() = resource::BufferMapState::Active {
                                 ptr,
@@ -851,5 +836,48 @@ impl<A: HalApi> LifetimeTracker<A> {
             }
         }
         pending_callbacks
+    }
+
+    pub(crate) fn release_gpu_resources(&mut self) {
+        // This is called when the device is lost, which makes every associated
+        // resource invalid and unusable. This is an opportunity to release all of
+        // the underlying gpu resources, even though the objects remain visible to
+        // the user agent. We purge this memory naturally when resources have been
+        // moved into the appropriate buckets, so this function just needs to
+        // initiate movement into those buckets, and it can do that by calling
+        // "destroy" on all the resources we know about which aren't already marked
+        // for cleanup.
+
+        // During these iterations, we discard all errors. We don't care!
+
+        // Destroy all the mapped buffers.
+        for buffer in &self.mapped {
+            let _ = buffer.destroy();
+        }
+
+        // Destroy all the unmapped buffers.
+        for buffer in &self.ready_to_map {
+            let _ = buffer.destroy();
+        }
+
+        // Destroy all the future_suspected_buffers.
+        for buffer in &self.future_suspected_buffers {
+            let _ = buffer.destroy();
+        }
+
+        // Destroy the buffers in all active submissions.
+        for submission in &self.active {
+            for buffer in &submission.mapped {
+                let _ = buffer.destroy();
+            }
+        }
+
+        // Destroy all the future_suspected_textures.
+        // TODO: texture.destroy is not implemented
+        /*
+        for texture in &self.future_suspected_textures {
+            let _ = texture.destroy();
+        }
+        */
     }
 }

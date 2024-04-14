@@ -86,29 +86,23 @@ pub async fn execute_test(
         .await;
 
     if let Err(panic) = panic_res {
-        let message = panic
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
-
-        let result = FailureResult::panic();
-
-        let result = if let Some(panic_str) = message {
-            result.with_message(panic_str)
+        let panic_str = panic.downcast_ref::<&'static str>();
+        let panic_string = if let Some(&panic_str) = panic_str {
+            Some(panic_str.to_string())
         } else {
-            result
+            panic.downcast_ref::<String>().cloned()
         };
 
-        failures.push(result)
+        failures.push(FailureResult::Panic(panic_string))
     }
 
     // Check whether any validation errors were reported during the test run.
     cfg_if::cfg_if!(
         if #[cfg(any(not(target_arch = "wasm32"), target_os = "emscripten"))] {
-            failures.extend(wgpu::hal::VALIDATION_CANARY.get_and_reset().into_iter().map(|msg| FailureResult::validation_error().with_message(msg)));
+            failures.extend(wgpu::hal::VALIDATION_CANARY.get_and_reset().into_iter().map(|msg| FailureResult::ValidationError(Some(msg))));
         } else if #[cfg(all(target_arch = "wasm32", feature = "webgl"))] {
             if _surface_guard.unwrap().check_for_unreported_errors() {
-                failures.push(FailureResult::validation_error());
+                failures.push(FailureResult::ValidationError(None));
             }
         } else {
         }

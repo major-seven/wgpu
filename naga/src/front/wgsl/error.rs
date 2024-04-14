@@ -87,7 +87,7 @@ impl ParseError {
 
     /// Returns a [`SourceLocation`] for the first label in the error message.
     pub fn location(&self, source: &str) -> Option<SourceLocation> {
-        self.labels.first().map(|label| label.0.location(source))
+        self.labels.get(0).map(|label| label.0.location(source))
     }
 }
 
@@ -184,13 +184,13 @@ pub enum Error<'a> {
     NonPowerOfTwoAlignAttribute(Span),
     InconsistentBinding(Span),
     TypeNotConstructible(Span),
-    TypeNotInferable(Span),
+    TypeNotInferrable(Span),
     InitializationTypeMismatch {
         name: Span,
         expected: String,
         got: String,
     },
-    DeclMissingTypeAndInit(Span),
+    MissingType(Span),
     MissingAttribute(&'static str, Span),
     InvalidAtomicPointer(Span),
     InvalidAtomicOperandType(Span),
@@ -269,11 +269,6 @@ pub enum Error<'a> {
         scalar: String,
         inner: ConstantEvaluatorError,
     },
-    ExceededLimitForNestedBraces {
-        span: Span,
-        limit: u8,
-    },
-    PipelineConstantIDValue(Span),
 }
 
 impl<'a> Error<'a> {
@@ -505,7 +500,7 @@ impl<'a> Error<'a> {
                 labels: vec![(span, "type is not constructible".into())],
                 notes: vec![],
             },
-            Error::TypeNotInferable(span) => ParseError {
+            Error::TypeNotInferrable(span) => ParseError {
                 message: "type can't be inferred".to_string(),
                 labels: vec![(span, "type can't be inferred".into())],
                 notes: vec![],
@@ -523,11 +518,11 @@ impl<'a> Error<'a> {
                     notes: vec![],
                 }
             }
-            Error::DeclMissingTypeAndInit(name_span) => ParseError {
-                message: format!("declaration of `{}` needs a type specifier or initializer", &source[name_span]),
+            Error::MissingType(name_span) => ParseError {
+                message: format!("variable `{}` needs a type", &source[name_span]),
                 labels: vec![(
                     name_span,
-                    "needs a type specifier or initializer".into(),
+                    format!("definition of `{}`", &source[name_span]).into(),
                 )],
                 notes: vec![],
             },
@@ -774,21 +769,6 @@ impl<'a> Error<'a> {
                 notes: vec![
                     format!("the expression should have been converted to have {} scalar type", scalar),
                 ]
-            },
-            Error::ExceededLimitForNestedBraces { span, limit } => ParseError {
-                message: "brace nesting limit reached".into(),
-                labels: vec![(span, "limit reached at this brace".into())],
-                notes: vec![
-                    format!("nesting limit is currently set to {limit}"),
-                ],
-            },
-            Error::PipelineConstantIDValue(span) => ParseError {
-                message: "pipeline constant ID must be between 0 and 65535 inclusive".to_string(),
-                labels: vec![(
-                    span,
-                    "must be between 0 and 65535 inclusive".into(),
-                )],
-                notes: vec![],
             },
         }
     }

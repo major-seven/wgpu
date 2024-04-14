@@ -42,18 +42,16 @@ async fn scissor_test_impl(
             label: Some("Pipeline"),
             layout: None,
             vertex: wgpu::VertexState {
-                module: &shader,
                 entry_point: "vs_main",
-                constants: &Default::default(),
+                module: &shader,
                 buffers: &[],
             },
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
                 entry_point: "fs_main",
-                constants: &Default::default(),
+                module: &shader,
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     blend: None,

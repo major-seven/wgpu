@@ -65,7 +65,7 @@ impl Frontend {
 
         let idx = self.entry_args.len();
         self.entry_args.push(EntryArg {
-            name: Some(name.into()),
+            name: None,
             binding: Binding::BuiltIn(data.builtin),
             handle,
             storage: data.storage,
@@ -472,6 +472,7 @@ impl Frontend {
 
                 let constant = Constant {
                     name: name.clone(),
+                    r#override: crate::Override::None,
                     ty,
                     init,
                 };

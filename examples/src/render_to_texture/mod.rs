@@ -59,13 +59,11 @@ async fn run(_path: Option<String>) {
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: "vs_main",
-            constants: &Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: "fs_main",
-            constants: &Default::default(),
             targets: &[Some(wgpu::TextureFormat::Rgba8UnormSrgb.into())],
         }),
         primitive: wgpu::PrimitiveState::default(),
@@ -159,7 +157,7 @@ pub fn main() {
             .init();
 
         let path = std::env::args()
-            .nth(2)
+            .nth(1)
             .unwrap_or_else(|| "please_don't_git_push_me.png".to_string());
         pollster::block_on(run(Some(path)));
     }

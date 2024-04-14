@@ -10,7 +10,6 @@ use bit_set::BitSet;
 const MAX_WORKGROUP_SIZE: u32 = 0x4000;
 
 #[derive(Clone, Debug, thiserror::Error)]
-#[cfg_attr(test, derive(PartialEq))]
 pub enum GlobalVariableError {
     #[error("Usage isn't compatible with address space {0:?}")]
     InvalidUsage(crate::AddressSpace),
@@ -31,8 +30,6 @@ pub enum GlobalVariableError {
         Handle<crate::Type>,
         #[source] Disalignment,
     ),
-    #[error("Initializer must be an override-expression")]
-    InitializerExprType,
     #[error("Initializer doesn't match the variable type")]
     InitializerType,
     #[error("Initializer can't be used with address space {0:?}")]
@@ -42,7 +39,6 @@ pub enum GlobalVariableError {
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
-#[cfg_attr(test, derive(PartialEq))]
 pub enum VaryingError {
     #[error("The type {0:?} does not match the varying")]
     InvalidType(Handle<crate::Type>),
@@ -80,7 +76,6 @@ pub enum VaryingError {
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
-#[cfg_attr(test, derive(PartialEq))]
 pub enum EntryPointError {
     #[error("Multiple conflicting entry points")]
     Conflict,
@@ -400,7 +395,6 @@ impl super::Validator {
         var: &crate::GlobalVariable,
         gctx: crate::proc::GlobalCtx,
         mod_info: &ModuleInfo,
-        global_expr_kind: &crate::proc::ExpressionKindTracker,
     ) -> Result<(), GlobalVariableError> {
         use super::TypeFlags;
 
@@ -529,10 +523,6 @@ impl super::Validator {
                 }
             }
 
-            if !global_expr_kind.is_const_or_override(init) {
-                return Err(GlobalVariableError::InitializerExprType);
-            }
-
             let decl_ty = &gctx.types[var.ty].inner;
             let init_ty = mod_info[init].inner_with(gctx.types);
             if !decl_ty.equivalent(init_ty, gctx.types) {
@@ -548,7 +538,6 @@ impl super::Validator {
         ep: &crate::EntryPoint,
         module: &crate::Module,
         mod_info: &ModuleInfo,
-        global_expr_kind: &crate::proc::ExpressionKindTracker,
     ) -> Result<FunctionInfo, WithSpan<EntryPointError>> {
         if ep.early_depth_test.is_some() {
             let required = Capabilities::EARLY_DEPTH_TEST;
@@ -577,7 +566,7 @@ impl super::Validator {
         }
 
         let mut info = self
-            .validate_function(&ep.function, module, mod_info, true, global_expr_kind)
+            .validate_function(&ep.function, module, mod_info, true)
             .map_err(WithSpan::into_other)?;
 
         {
@@ -630,7 +619,7 @@ impl super::Validator {
             ctx.validate(fr.ty, fr.binding.as_ref())
                 .map_err_inner(|e| EntryPointError::Result(e).with_span())?;
             if ctx.second_blend_source {
-                // Only the first location may be used when dual source blending
+                // Only the first location may be used whhen dual source blending
                 if ctx.location_mask.len() == 1 && ctx.location_mask.contains(0) {
                     info.dual_source_blending = true;
                 } else {

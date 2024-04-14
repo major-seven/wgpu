@@ -324,7 +324,6 @@
         predeclared_types: {},
     ),
     constants: [],
-    overrides: [],
     global_variables: [
         (
             name: Some("global_const"),
@@ -378,7 +377,7 @@
             init: None,
         ),
     ],
-    global_expressions: [
+    const_expressions: [
         Literal(U32(0)),
         Literal(U32(0)),
         Literal(U32(0)),

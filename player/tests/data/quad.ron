@@ -1,5 +1,5 @@
 (
-    features: [],
+    features: 0x0,
     expectations: [
         (
             name: "Quad",
@@ -57,16 +57,14 @@
                 vertex: (
                     stage: (
                         module: Id(0, 1, Empty),
-                        entry_point: None,
-                        constants: {},
+                        entry_point: "vs_main",
                     ),
                     buffers: [],
                 ),
                 fragment: Some((
                     stage: (
                         module: Id(0, 1, Empty),
-                        entry_point: None,
-                        constants: {},
+                        entry_point: "fs_main",
                     ),
                     targets: [
                         Some((

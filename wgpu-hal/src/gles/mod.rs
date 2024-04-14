@@ -215,7 +215,7 @@ bitflags::bitflags! {
         // (https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/4972/diffs?diff_id=75888#22f5d1004713c9bbf857988c7efb81631ab88f99_323_327)
         // seems to indicate all skylake models are effected.
         const MESA_I915_SRGB_SHADER_CLEAR = 1 << 0;
-        /// Buffer map must emulated because it is not supported natively
+        /// Buffer map must emulated becuase it is not supported natively
         const EMULATE_BUFFER_MAP = 1 << 1;
     }
 }
@@ -251,11 +251,6 @@ struct AdapterShared {
     next_shader_id: AtomicU32,
     program_cache: Mutex<ProgramCache>,
     es: bool,
-
-    /// Result of `gl.get_parameter_i32(glow::MAX_SAMPLES)`.
-    /// Cached here so it doesn't need to be queried every time texture format capabilities are requested.
-    /// (this has been shown to be a significant enough overhead)
-    max_msaa_samples: i32,
 }
 
 pub struct Adapter {
@@ -269,11 +264,6 @@ pub struct Device {
     render_doc: crate::auxil::renderdoc::RenderDoc,
 }
 
-pub struct ShaderClearProgram {
-    pub program: glow::Program,
-    pub color_uniform_location: glow::UniformLocation,
-}
-
 pub struct Queue {
     shared: Arc<AdapterShared>,
     features: wgt::Features,
@@ -281,7 +271,9 @@ pub struct Queue {
     copy_fbo: glow::Framebuffer,
     /// Shader program used to clear the screen for [`Workarounds::MESA_I915_SRGB_SHADER_CLEAR`]
     /// devices.
-    shader_clear_program: Option<ShaderClearProgram>,
+    shader_clear_program: glow::Program,
+    /// The uniform location of the color uniform in the shader clear program
+    shader_clear_program_color_uniform_location: glow::UniformLocation,
     /// Keep a reasonably large buffer filled with zeroes, so that we can implement `ClearBuffer` of
     /// zeroes by copying from it.
     zero_buffer: glow::Buffer,

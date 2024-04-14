@@ -1,7 +1,7 @@
 /*!
 # DirectX12 API internals.
 
-Generally the mapping is straightforward.
+Generally the mapping is straightforwad.
 
 ## Resource transitions
 
@@ -195,7 +195,6 @@ struct PrivateCapabilities {
     heap_create_not_zeroed: bool,
     casting_fully_typed_format_supported: bool,
     suballocation_supported: bool,
-    shader_model: naga::back::hlsl::ShaderModel,
 }
 
 #[derive(Default)]
@@ -238,9 +237,6 @@ struct DeviceShared {
     heap_views: descriptor::GeneralHeap,
     heap_samplers: descriptor::GeneralHeap,
 }
-
-unsafe impl Send for DeviceShared {}
-unsafe impl Sync for DeviceShared {}
 
 pub struct Device {
     raw: d3d12::Device,
@@ -390,6 +386,7 @@ impl fmt::Debug for CommandEncoder {
 #[derive(Debug)]
 pub struct CommandBuffer {
     raw: d3d12::GraphicsCommandList,
+    closed: bool,
 }
 
 unsafe impl Send for CommandBuffer {}
@@ -640,9 +637,7 @@ impl SwapChain {
     }
 }
 
-impl crate::Surface for Surface {
-    type A = Api;
-
+impl crate::Surface<Api> for Surface {
     unsafe fn configure(
         &self,
         device: &Device,
@@ -887,13 +882,10 @@ impl crate::Surface for Surface {
     }
 }
 
-impl crate::Queue for Queue {
-    type A = Api;
-
+impl crate::Queue<Api> for Queue {
     unsafe fn submit(
         &self,
         command_buffers: &[&CommandBuffer],
-        _surface_textures: &[&Texture],
         signal_fence: Option<(&mut Fence, crate::FenceValue)>,
     ) -> Result<(), crate::DeviceError> {
         let mut temp_lists = self.temp_lists.lock();

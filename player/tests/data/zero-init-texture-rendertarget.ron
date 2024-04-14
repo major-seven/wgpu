@@ -1,5 +1,5 @@
 (
-    features: [],
+    features: 0x0,
     expectations: [
         (
             name: "Render Target",

@@ -1,4 +1,4 @@
-// Copyright 2018-2024 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use deno_core::error::AnyError;
 use deno_core::op2;
@@ -8,7 +8,6 @@ use deno_core::ResourceId;
 use serde::Deserialize;
 use serde::Serialize;
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::error::WebGpuError;
@@ -75,8 +74,8 @@ pub enum GPUPipelineLayoutOrGPUAutoLayoutMode {
 #[serde(rename_all = "camelCase")]
 pub struct GpuProgrammableStage {
     module: ResourceId,
-    entry_point: Option<String>,
-    constants: HashMap<String, f64>,
+    entry_point: String,
+    // constants: HashMap<String, GPUPipelineConstantValue>
 }
 
 #[op2]
@@ -111,16 +110,16 @@ pub fn op_webgpu_create_compute_pipeline(
         layout: pipeline_layout,
         stage: wgpu_core::pipeline::ProgrammableStageDescriptor {
             module: compute_shader_module_resource.1,
-            entry_point: compute.entry_point.map(Cow::from),
-            constants: Cow::Owned(compute.constants),
+            entry_point: Cow::from(compute.entry_point),
+            // TODO(lucacasonato): support args.compute.constants
         },
     };
     let implicit_pipelines = match layout {
         GPUPipelineLayoutOrGPUAutoLayoutMode::Layout(_) => None,
         GPUPipelineLayoutOrGPUAutoLayoutMode::Auto(GPUAutoLayoutMode::Auto) => {
             Some(wgpu_core::device::ImplicitPipelineIds {
-                root_id: None,
-                group_ids: &[None; MAX_BIND_GROUPS],
+                root_id: (),
+                group_ids: &[(); MAX_BIND_GROUPS],
             })
         }
     };
@@ -128,7 +127,7 @@ pub fn op_webgpu_create_compute_pipeline(
     let (compute_pipeline, maybe_err) = gfx_select!(device => instance.device_create_compute_pipeline(
       device,
       &descriptor,
-      None,
+      (),
       implicit_pipelines
     ));
 
@@ -160,7 +159,7 @@ pub fn op_webgpu_compute_pipeline_get_bind_group_layout(
         .get::<WebGpuComputePipeline>(compute_pipeline_rid)?;
     let compute_pipeline = compute_pipeline_resource.1;
 
-    let (bind_group_layout, maybe_err) = gfx_select!(compute_pipeline => instance.compute_pipeline_get_bind_group_layout(compute_pipeline, index, None));
+    let (bind_group_layout, maybe_err) = gfx_select!(compute_pipeline => instance.compute_pipeline_get_bind_group_layout(compute_pipeline, index, ()));
 
     let label =
         gfx_select!(bind_group_layout => instance.bind_group_layout_label(bind_group_layout));
@@ -280,7 +279,6 @@ impl<'a> From<GpuVertexBufferLayout> for wgpu_core::pipeline::VertexBufferLayout
 struct GpuVertexState {
     module: ResourceId,
     entry_point: String,
-    constants: HashMap<String, f64>,
     buffers: Vec<Option<GpuVertexBufferLayout>>,
 }
 
@@ -308,7 +306,7 @@ struct GpuFragmentState {
     targets: Vec<Option<wgpu_types::ColorTargetState>>,
     module: u32,
     entry_point: String,
-    constants: HashMap<String, f64>,
+    // TODO(lucacasonato): constants
 }
 
 #[derive(Deserialize)]
@@ -357,10 +355,9 @@ pub fn op_webgpu_create_render_pipeline(
         Some(wgpu_core::pipeline::FragmentState {
             stage: wgpu_core::pipeline::ProgrammableStageDescriptor {
                 module: fragment_shader_module_resource.1,
-                entry_point: Some(Cow::from(fragment.entry_point)),
-                constants: Cow::Owned(fragment.constants),
+                entry_point: Cow::from(fragment.entry_point),
             },
-            targets: Cow::Owned(fragment.targets),
+            targets: Cow::from(fragment.targets),
         })
     } else {
         None
@@ -380,8 +377,7 @@ pub fn op_webgpu_create_render_pipeline(
         vertex: wgpu_core::pipeline::VertexState {
             stage: wgpu_core::pipeline::ProgrammableStageDescriptor {
                 module: vertex_shader_module_resource.1,
-                entry_point: Some(Cow::Owned(args.vertex.entry_point)),
-                constants: Cow::Owned(args.vertex.constants),
+                entry_point: Cow::Owned(args.vertex.entry_point),
             },
             buffers: Cow::Owned(vertex_buffers),
         },
@@ -396,8 +392,8 @@ pub fn op_webgpu_create_render_pipeline(
         GPUPipelineLayoutOrGPUAutoLayoutMode::Layout(_) => None,
         GPUPipelineLayoutOrGPUAutoLayoutMode::Auto(GPUAutoLayoutMode::Auto) => {
             Some(wgpu_core::device::ImplicitPipelineIds {
-                root_id: None,
-                group_ids: &[None; MAX_BIND_GROUPS],
+                root_id: (),
+                group_ids: &[(); MAX_BIND_GROUPS],
             })
         }
     };
@@ -405,7 +401,7 @@ pub fn op_webgpu_create_render_pipeline(
     let (render_pipeline, maybe_err) = gfx_select!(device => instance.device_create_render_pipeline(
       device,
       &descriptor,
-      None,
+      (),
       implicit_pipelines
     ));
 
@@ -429,7 +425,7 @@ pub fn op_webgpu_render_pipeline_get_bind_group_layout(
         .get::<WebGpuRenderPipeline>(render_pipeline_rid)?;
     let render_pipeline = render_pipeline_resource.1;
 
-    let (bind_group_layout, maybe_err) = gfx_select!(render_pipeline => instance.render_pipeline_get_bind_group_layout(render_pipeline, index, None));
+    let (bind_group_layout, maybe_err) = gfx_select!(render_pipeline => instance.render_pipeline_get_bind_group_layout(render_pipeline, index, ()));
 
     let label =
         gfx_select!(bind_group_layout => instance.bind_group_layout_label(bind_group_layout));

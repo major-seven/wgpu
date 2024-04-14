@@ -441,7 +441,7 @@ impl<'a, W> Writer<'a, W> {
         {
             for (_, expr) in expressions.iter() {
                 match *expr {
-                // Check for queries that need aditonal features
+                // Check for queries that neeed aditonal features
                 Expression::ImageQuery {
                     image,
                     query,

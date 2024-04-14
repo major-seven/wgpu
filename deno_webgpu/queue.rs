@@ -1,28 +1,16 @@
-// Copyright 2018-2024 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use crate::command_encoder::WebGpuCommandBuffer;
-use crate::Instance;
 use deno_core::error::AnyError;
 use deno_core::op2;
 use deno_core::OpState;
 use deno_core::Resource;
 use deno_core::ResourceId;
 use serde::Deserialize;
-use std::borrow::Cow;
-use std::rc::Rc;
 
 use super::error::WebGpuResult;
 
-pub struct WebGpuQueue(pub Instance, pub wgpu_core::id::QueueId);
-impl Resource for WebGpuQueue {
-    fn name(&self) -> Cow<str> {
-        "webGPUQueue".into()
-    }
-
-    fn close(self: Rc<Self>) {
-        gfx_select!(self.1 => self.0.queue_drop(self.1));
-    }
-}
+type WebGpuQueue = super::WebGpuDevice;
 
 #[op2]
 #[serde]
@@ -31,7 +19,7 @@ pub fn op_webgpu_queue_submit(
     #[smi] queue_rid: ResourceId,
     #[serde] command_buffers: Vec<ResourceId>,
 ) -> Result<WebGpuResult, AnyError> {
-    let instance = state.borrow::<Instance>();
+    let instance = state.borrow::<super::Instance>();
     let queue_resource = state.resource_table.get::<WebGpuQueue>(queue_rid)?;
     let queue = queue_resource.1;
 
@@ -83,7 +71,7 @@ pub fn op_webgpu_write_buffer(
     #[number] size: Option<usize>,
     #[buffer] buf: &[u8],
 ) -> Result<WebGpuResult, AnyError> {
-    let instance = state.borrow::<Instance>();
+    let instance = state.borrow::<super::Instance>();
     let buffer_resource = state
         .resource_table
         .get::<super::buffer::WebGpuBuffer>(buffer)?;
@@ -116,7 +104,7 @@ pub fn op_webgpu_write_texture(
     #[serde] size: wgpu_types::Extent3d,
     #[buffer] buf: &[u8],
 ) -> Result<WebGpuResult, AnyError> {
-    let instance = state.borrow::<Instance>();
+    let instance = state.borrow::<super::Instance>();
     let texture_resource = state
         .resource_table
         .get::<super::texture::WebGpuTexture>(destination.texture)?;

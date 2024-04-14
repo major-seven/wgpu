@@ -13,35 +13,19 @@ impl Drop for super::Instance {
     }
 }
 
-impl crate::Instance for super::Instance {
-    type A = super::Api;
-
+impl crate::Instance<super::Api> for super::Instance {
     unsafe fn init(desc: &crate::InstanceDescriptor) -> Result<Self, crate::InstanceError> {
         profiling::scope!("Init DX12 Backend");
         let lib_main = d3d12::D3D12Lib::new().map_err(|e| {
             crate::InstanceError::with_source(String::from("failed to load d3d12.dll"), e)
         })?;
 
-        if desc
-            .flags
-            .intersects(wgt::InstanceFlags::VALIDATION | wgt::InstanceFlags::GPU_BASED_VALIDATION)
-        {
+        if desc.flags.contains(wgt::InstanceFlags::VALIDATION) {
             // Enable debug layer
             match lib_main.get_debug_interface() {
                 Ok(pair) => match pair.into_result() {
                     Ok(debug_controller) => {
-                        if desc.flags.intersects(wgt::InstanceFlags::VALIDATION) {
-                            debug_controller.enable_layer();
-                        }
-                        if desc
-                            .flags
-                            .intersects(wgt::InstanceFlags::GPU_BASED_VALIDATION)
-                        {
-                            #[allow(clippy::collapsible_if)]
-                            if !debug_controller.enable_gpu_based_validation() {
-                                log::warn!("Failed to enable GPU-based validation");
-                            }
-                        }
+                        debug_controller.enable_layer();
                     }
                     Err(err) => {
                         log::warn!("Unable to enable D3D12 debug interface: {}", err);

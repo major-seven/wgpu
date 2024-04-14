@@ -5,10 +5,9 @@
 
 use std::{num::NonZeroU64, ops::Range};
 
-use wgpu::util::{BufferInitDescriptor, DeviceExt, RenderEncoder};
+use wgpu::util::{BufferInitDescriptor, DeviceExt};
 
 use wgpu_test::{gpu_test, GpuTestConfiguration, TestParameters, TestingContext};
-use wgt::RenderBundleDescriptor;
 
 /// Generic struct representing a draw call
 struct Draw {
@@ -20,7 +19,7 @@ struct Draw {
 
 impl Draw {
     /// Directly execute the draw call
-    fn execute(&self, rpass: &mut dyn RenderEncoder<'_>) {
+    fn execute(&self, rpass: &mut wgpu::RenderPass<'_>) {
         if let Some(base_vertex) = self.base_vertex {
             rpass.draw_indexed(self.vertex.clone(), base_vertex, self.instance.clone());
         } else {
@@ -65,7 +64,7 @@ impl Draw {
     /// Execute the draw call from the given indirect buffer
     fn execute_indirect<'rpass>(
         &self,
-        rpass: &mut dyn RenderEncoder<'rpass>,
+        rpass: &mut wgpu::RenderPass<'rpass>,
         indirect: &'rpass wgpu::Buffer,
         offset: &mut u64,
     ) {
@@ -170,21 +169,10 @@ impl DrawCallKind {
     const ARRAY: [Self; 2] = [Self::Direct, Self::Indirect];
 }
 
-#[derive(Debug, Copy, Clone)]
-enum EncoderKind {
-    RenderPass,
-    RenderBundle,
-}
-
-impl EncoderKind {
-    const ARRAY: [Self; 2] = [Self::RenderPass, Self::RenderBundle];
-}
-
 struct Test {
     case: TestCase,
     id_source: IdSource,
     draw_call_kind: DrawCallKind,
-    encoder_kind: EncoderKind,
 }
 
 impl Test {
@@ -272,23 +260,20 @@ async fn vertex_index_common(ctx: TestingContext) {
             push_constant_ranges: &[],
         });
 
-    let constants = &Default::default();
     let mut pipeline_desc = wgpu::RenderPipelineDescriptor {
         label: None,
         layout: Some(&ppl),
         vertex: wgpu::VertexState {
             buffers: &[],
-            module: &shader,
             entry_point: "vs_main_builtin",
-            constants,
+            module: &shader,
         },
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
             entry_point: "fs_main",
-            constants,
+            module: &shader,
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 blend: None,
@@ -340,14 +325,11 @@ async fn vertex_index_common(ctx: TestingContext) {
     for case in TestCase::ARRAY {
         for id_source in IdSource::ARRAY {
             for draw_call_kind in DrawCallKind::ARRAY {
-                for encoder_kind in EncoderKind::ARRAY {
-                    tests.push(Test {
-                        case,
-                        id_source,
-                        draw_call_kind,
-                        encoder_kind,
-                    })
-                }
+                tests.push(Test {
+                    case,
+                    id_source,
+                    draw_call_kind,
+                })
             }
         }
     }
@@ -391,7 +373,6 @@ async fn vertex_index_common(ctx: TestingContext) {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
 
-        let render_bundle;
         let indirect_buffer;
         let mut rpass = encoder1.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -405,64 +386,34 @@ async fn vertex_index_common(ctx: TestingContext) {
             occlusion_query_set: None,
         });
 
-        {
-            // Need to scope render_bundle_encoder since it's not Send and would otherwise
-            // infect the function if not going out of scope before an await call.
-            // (it is dropped via `take` + `finish` earlier, but compiler does not take this into account)
-            let mut render_bundle_encoder = match test.encoder_kind {
-                EncoderKind::RenderPass => None,
-                EncoderKind::RenderBundle => Some(ctx.device.create_render_bundle_encoder(
-                    &wgpu::RenderBundleEncoderDescriptor {
-                        label: Some("test renderbundle encoder"),
-                        color_formats: &[Some(wgpu::TextureFormat::Rgba8Unorm)],
-                        depth_stencil: None,
-                        sample_count: 1,
-                        multiview: None,
-                    },
-                )),
-            };
+        rpass.set_vertex_buffer(0, identity_buffer.slice(..));
+        rpass.set_vertex_buffer(1, identity_buffer.slice(..));
+        rpass.set_index_buffer(identity_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        rpass.set_pipeline(pipeline);
+        rpass.set_bind_group(0, &bg, &[]);
 
-            let render_encoder: &mut dyn RenderEncoder = render_bundle_encoder
-                .as_mut()
-                .map(|r| r as &mut dyn RenderEncoder)
-                .unwrap_or(&mut rpass);
+        let draws = test.case.draws();
 
-            render_encoder.set_vertex_buffer(0, identity_buffer.slice(..));
-            render_encoder.set_vertex_buffer(1, identity_buffer.slice(..));
-            render_encoder.set_index_buffer(identity_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_encoder.set_pipeline(pipeline);
-            render_encoder.set_bind_group(0, &bg, &[]);
-
-            let draws = test.case.draws();
-
-            match test.draw_call_kind {
-                DrawCallKind::Direct => {
-                    for draw in draws {
-                        draw.execute(render_encoder);
-                    }
-                }
-                DrawCallKind::Indirect => {
-                    let mut indirect_bytes = Vec::new();
-                    for draw in draws {
-                        draw.add_to_buffer(&mut indirect_bytes, features);
-                    }
-                    indirect_buffer = ctx.device.create_buffer_init(&BufferInitDescriptor {
-                        label: Some("indirect"),
-                        contents: &indirect_bytes,
-                        usage: wgpu::BufferUsages::INDIRECT,
-                    });
-                    let mut offset = 0;
-                    for draw in draws {
-                        draw.execute_indirect(render_encoder, &indirect_buffer, &mut offset);
-                    }
+        match test.draw_call_kind {
+            DrawCallKind::Direct => {
+                for draw in draws {
+                    draw.execute(&mut rpass);
                 }
             }
-
-            if let Some(render_bundle_encoder) = render_bundle_encoder.take() {
-                render_bundle = render_bundle_encoder.finish(&RenderBundleDescriptor {
-                    label: Some("test renderbundle"),
+            DrawCallKind::Indirect => {
+                let mut indirect_bytes = Vec::new();
+                for draw in draws {
+                    draw.add_to_buffer(&mut indirect_bytes, features);
+                }
+                indirect_buffer = ctx.device.create_buffer_init(&BufferInitDescriptor {
+                    label: Some("indirect"),
+                    contents: &indirect_bytes,
+                    usage: wgpu::BufferUsages::INDIRECT,
                 });
-                rpass.execute_bundles([&render_bundle]);
+                let mut offset = 0;
+                for draw in draws {
+                    draw.execute_indirect(&mut rpass, &indirect_buffer, &mut offset);
+                }
             }
         }
 
@@ -488,18 +439,21 @@ async fn vertex_index_common(ctx: TestingContext) {
             .panic_on_timeout();
         let data: Vec<u32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
 
-        let case_name = format!(
-            "Case {:?} getting indices from {:?} using {:?} draw calls, encoded with a {:?}",
-            test.case, test.id_source, test.draw_call_kind, test.encoder_kind
-        );
         if data != expected {
             eprintln!(
-                "Failed: Got: {:?} Expected: {:?} - {case_name}",
-                data, expected,
+                "Failed: Got: {:?} Expected: {:?} - Case {:?} getting indices from {:?} using {:?} draw calls",
+                data,
+                expected,
+                test.case,
+                test.id_source,
+                test.draw_call_kind
             );
             failed = true;
         } else {
-            eprintln!("Passed: {case_name}");
+            eprintln!(
+                "Passed: Case {:?} getting indices from {:?} using {:?} draw calls",
+                test.case, test.id_source, test.draw_call_kind
+            );
         }
     }
 
@@ -511,7 +465,6 @@ static VERTEX_INDICES: GpuTestConfiguration = GpuTestConfiguration::new()
     .parameters(
         TestParameters::default()
             .test_features_limits()
-            .features(wgpu::Features::VERTEX_WRITABLE_STORAGE)
-            .features(wgpu::Features::INDIRECT_FIRST_INSTANCE),
+            .features(wgpu::Features::VERTEX_WRITABLE_STORAGE),
     )
     .run_async(vertex_index_common);

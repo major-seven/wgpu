@@ -1,7 +1,5 @@
 //! Test utilities for the wgpu repository.
 
-#![allow(clippy::arc_with_non_send_sync)] // False positive on wasm
-
 mod config;
 mod expectations;
 pub mod image;

@@ -399,7 +399,6 @@ pub fn map_vertex_format(vertex_format: wgt::VertexFormat) -> vk::Format {
         Vf::Float64x2 => vk::Format::R64G64_SFLOAT,
         Vf::Float64x3 => vk::Format::R64G64B64_SFLOAT,
         Vf::Float64x4 => vk::Format::R64G64B64A64_SFLOAT,
-        Vf::Unorm10_10_10_2 => vk::Format::A2B10G10R10_UNORM_PACK32,
     }
 }
 
@@ -925,7 +924,7 @@ pub fn map_acceleration_structure_flags(
     vk_flags
 }
 
-pub fn map_acceleration_structure_geometry_flags(
+pub fn map_acceleration_structure_geomety_flags(
     flags: crate::AccelerationStructureGeometryFlags,
 ) -> vk::GeometryFlagsKHR {
     let mut vk_flags = vk::GeometryFlagsKHR::empty();

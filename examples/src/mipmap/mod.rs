@@ -8,8 +8,8 @@ const MIP_PASS_COUNT: u32 = MIP_LEVEL_COUNT - 1;
 
 const QUERY_FEATURES: wgpu::Features = {
     wgpu::Features::TIMESTAMP_QUERY
-        .union(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES)
         .union(wgpu::Features::PIPELINE_STATISTICS_QUERY)
+        .union(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES)
 };
 
 fn create_texels(size: usize, cx: f32, cy: f32) -> Vec<u8> {
@@ -93,13 +93,11 @@ impl Example {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                constants: &Default::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
-                constants: &Default::default(),
                 targets: &[Some(TEXTURE_FORMAT.into())],
             }),
             primitive: wgpu::PrimitiveState {
@@ -292,13 +290,11 @@ impl crate::framework::Example for Example {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                constants: &Default::default(),
                 buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
-                constants: &Default::default(),
                 targets: &[Some(config.view_formats[0].into())],
             }),
             primitive: wgpu::PrimitiveState {

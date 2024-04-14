@@ -3,7 +3,54 @@
 //! To start using the API, create an [`Instance`].
 //!
 //! ## Feature flags
-#![doc = document_features::document_features!()]
+// NOTE: feature docs. below should be kept in sync. with `Cargo.toml`!
+//!
+//! ### Backends
+//!
+//! ⚠️ WIP: Not all backends can be manually configured today. On Windows & Linux the **Vulkan & GLES
+//! backends are always enabled**. See [#3514](https://github.com/gfx-rs/wgpu/issues/3514) for more
+//! details.
+//!
+//! - **`dx12`** _(enabled by default)_ ---   Enables the DX12 backend on Windows.
+//! - **`metal`** _(enabled by default)_ --- Enables the Metal backend on macOS & iOS.
+//! - **`webgpu`** _(enabled by default)_ --- Enables the WebGPU backend on Wasm. Disabled when targeting `emscripten`.
+//! - **`angle`** --- Enables the GLES backend via [ANGLE](https://github.com/google/angle) on macOS.
+//! - **`vulkan-portability`** --- Enables the Vulkan backend on macOS & iOS.
+//! - **`webgl`** --- Enables the GLES backend on Wasm.
+//!     - ⚠️ WIP: Currently will also enable GLES dependencies on any other targets.
+//!
+//! **Note:** In the documentation, if you see that an item depends on a backend,
+//! it means that the item is only available when that backend is enabled _and_ the backend
+//! is supported on the current platform.
+//!
+//! ### Shading language support
+//!
+//! - **`wgsl`** _(enabled by default)_ --- Enable accepting WGSL shaders as input.
+//! - **`spirv`** --- Enable accepting SPIR-V shaders as input.
+//! - **`glsl`** --- Enable accepting GLSL shaders as input.
+//! - **`naga-ir`** --- Enable accepting Naga IR shaders as input.
+//!
+//! ### Logging & Tracing
+//!
+//! The following features do not have any effect on the WebGPU backend.
+//!
+//! - **`strict_asserts`** --- Apply run-time checks, even in release builds. These are in addition
+//!   to the validation carried out at public APIs in all builds.
+//! - **`api_log_info`** --- Log all API entry points at info instead of trace level.
+//! - **`trace`** --- Allow writing of trace capture files. See [`Adapter::request_device`].
+//! - **`replay`** --- Allow deserializing of trace capture files that were written with the `trace`
+//!   feature. To replay a trace file use the [wgpu
+//!   player](https://github.com/gfx-rs/wgpu/tree/trunk/player).
+//!
+//! ### Other
+//!
+//! - **`fragile-send-sync-non-atomic-wasm`** --- Implement `Send` and `Sync` on Wasm, but only if
+//!   atomics are not enabled.
+//!
+//!   WebGL/WebGPU objects can not be shared between threads. However, it can be useful to
+//!   artificially mark them as `Send` and `Sync` anyways to make it easier to write cross-platform
+//!   code. This is technically _very_ unsafe in a multithreaded environment, but on a wasm binary
+//!   compiled without atomics we know we are definitely not in a multithreaded environment.
 //!
 //! ### Feature Aliases
 //!
@@ -28,7 +75,6 @@ use std::{
     any::Any,
     borrow::Cow,
     cmp::Ordering,
-    collections::HashMap,
     error, fmt,
     future::Future,
     marker::PhantomData,
@@ -117,8 +163,6 @@ pub enum ErrorFilter {
     OutOfMemory,
     /// Catch only validation errors.
     Validation,
-    /// Catch only internal errors.
-    Internal,
 }
 static_assertions::assert_impl_all!(ErrorFilter: Send, Sync);
 
@@ -1072,7 +1116,8 @@ static_assertions::assert_impl_all!(BufferBinding<'_>: Send, Sync);
 /// Corresponds to [WebGPU `GPULoadOp`](https://gpuweb.github.io/gpuweb/#enumdef-gpuloadop),
 /// plus the corresponding clearValue.
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "trace", derive(serde::Serialize))]
+#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
 pub enum LoadOp<V> {
     /// Loads the specified value for this attachment into the render pass.
     ///
@@ -1099,7 +1144,8 @@ impl<V: Default> Default for LoadOp<V> {
 ///
 /// Corresponds to [WebGPU `GPUStoreOp`](https://gpuweb.github.io/gpuweb/#enumdef-gpustoreop).
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "trace", derive(serde::Serialize))]
+#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
 pub enum StoreOp {
     /// Stores the resulting value of the render pass for this attachment.
     #[default]
@@ -1121,7 +1167,8 @@ pub enum StoreOp {
 /// This type is unique to the Rust API of `wgpu`. In the WebGPU specification,
 /// separate `loadOp` and `storeOp` fields are used instead.
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "trace", derive(serde::Serialize))]
+#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
 pub struct Operations<V> {
     /// How data should be read through this attachment.
     pub load: LoadOp<V>,
@@ -1468,14 +1515,6 @@ pub struct VertexState<'a> {
     /// The name of the entry point in the compiled shader. There must be a function with this name
     /// in the shader.
     pub entry_point: &'a str,
-    /// Specifies the values of pipeline-overridable constants in the shader module.
-    ///
-    /// If an `@id` attribute was specified on the declaration,
-    /// the key must be the pipeline constant ID as a decimal ASCII number; if not,
-    /// the key must be the constant's identifier name.
-    ///
-    /// The value may represent any of WGSL's concrete scalar types.
-    pub constants: &'a HashMap<String, f64>,
     /// The format of any vertex buffers used with this pipeline.
     pub buffers: &'a [VertexBufferLayout<'a>],
 }
@@ -1495,14 +1534,6 @@ pub struct FragmentState<'a> {
     /// The name of the entry point in the compiled shader. There must be a function with this name
     /// in the shader.
     pub entry_point: &'a str,
-    /// Specifies the values of pipeline-overridable constants in the shader module.
-    ///
-    /// If an `@id` attribute was specified on the declaration,
-    /// the key must be the pipeline constant ID as a decimal ASCII number; if not,
-    /// the key must be the constant's identifier name.
-    ///
-    /// The value may represent any of WGSL's concrete scalar types.
-    pub constants: &'a HashMap<String, f64>,
     /// The color state of the render targets.
     pub targets: &'a [Option<ColorTargetState>],
 }
@@ -1592,14 +1623,6 @@ pub struct ComputePipelineDescriptor<'a> {
     /// The name of the entry point in the compiled shader. There must be a function with this name
     /// and no return value in the shader.
     pub entry_point: &'a str,
-    /// Specifies the values of pipeline-overridable constants in the shader module.
-    ///
-    /// If an `@id` attribute was specified on the declaration,
-    /// the key must be the pipeline constant ID as a decimal ASCII number; if not,
-    /// the key must be the constant's identifier name.
-    ///
-    /// The value may represent any of WGSL's concrete scalar types.
-    pub constants: &'a HashMap<String, f64>,
 }
 #[cfg(send_sync)]
 static_assertions::assert_impl_all!(ComputePipelineDescriptor<'_>: Send, Sync);
@@ -1726,62 +1749,39 @@ impl Default for Instance {
     /// # Panics
     ///
     /// If no backend feature for the active target platform is enabled,
-    /// this method will panic, see [`Instance::enabled_backend_features()`].
+    /// this method will panic, see [`Instance::any_backend_feature_enabled()`].
     fn default() -> Self {
         Self::new(InstanceDescriptor::default())
     }
 }
 
 impl Instance {
-    /// Returns which backends can be picked for the current build configuration.
+    /// Returns `true` if any backend feature is enabled for the current build configuration.
     ///
-    /// The returned set depends on a combination of target platform and enabled features.
-    /// This does *not* do any runtime checks and is exclusively based on compile time information.
+    /// Which feature makes this method return true depends on the target platform:
+    /// * MacOS/iOS: `metal`, `vulkan-portability` or `angle`
+    /// * Wasm32: `webgpu`, `webgl` or Emscripten target.
+    /// * All other: Always returns true
     ///
-    /// `InstanceDescriptor::backends` does not need to be a subset of this,
-    /// but any backend that is not in this set, will not be picked.
-    ///
-    /// TODO: Right now it's otherwise not possible yet to opt-out of all features on some platforms.
+    /// TODO: Right now it's otherwise not possible yet to opt-out of all features on most platforms.
     /// See <https://github.com/gfx-rs/wgpu/issues/3514>
-    /// * Windows/Linux/Android: always enables Vulkan and GLES with no way to opt out
-    pub const fn enabled_backend_features() -> Backends {
-        let mut backends = Backends::empty();
+    /// * Windows: always enables Vulkan and GLES with no way to opt out
+    /// * Linux: always enables Vulkan and GLES with no way to opt out
+    pub const fn any_backend_feature_enabled() -> bool {
+        // Method intentionally kept verbose to keep it a bit easier to follow!
 
-        if cfg!(native) {
-            if cfg!(metal) {
-                backends = backends.union(Backends::METAL);
-            }
-            if cfg!(dx12) {
-                backends = backends.union(Backends::DX12);
-            }
-
-            // Windows, Android, Linux currently always enable Vulkan and OpenGL.
-            // See <https://github.com/gfx-rs/wgpu/issues/3514>
-            if cfg!(target_os = "windows") || cfg!(unix) {
-                backends = backends.union(Backends::VULKAN).union(Backends::GL);
-            }
-
-            // Vulkan on Mac/iOS is only available through vulkan-portability.
-            if (cfg!(target_os = "ios") || cfg!(target_os = "macos"))
-                && cfg!(feature = "vulkan-portability")
-            {
-                backends = backends.union(Backends::VULKAN);
-            }
-
-            // GL on Mac is only available through angle.
-            if cfg!(target_os = "macos") && cfg!(feature = "angle") {
-                backends = backends.union(Backends::GL);
-            }
+        // On macOS and iOS, at least one of Metal, Vulkan or GLES backend must be enabled.
+        let is_mac_or_ios = cfg!(target_os = "macos") || cfg!(target_os = "ios");
+        if is_mac_or_ios {
+            cfg!(feature = "metal")
+                || cfg!(feature = "vulkan-portability")
+                || cfg!(feature = "angle")
+        // On the web, either WebGPU or WebGL must be enabled.
+        } else if cfg!(target_arch = "wasm32") {
+            cfg!(feature = "webgpu") || cfg!(feature = "webgl") || cfg!(target_os = "emscripten")
         } else {
-            if cfg!(webgpu) {
-                backends = backends.union(Backends::BROWSER_WEBGPU);
-            }
-            if cfg!(webgl) {
-                backends = backends.union(Backends::GL);
-            }
+            true
         }
-
-        backends
     }
 
     /// Create an new instance of wgpu.
@@ -1803,13 +1803,13 @@ impl Instance {
     /// # Panics
     ///
     /// If no backend feature for the active target platform is enabled,
-    /// this method will panic, see [`Instance::enabled_backend_features()`].
+    /// this method will panic, see [`Instance::any_backend_feature_enabled()`].
     #[allow(unreachable_code)]
     pub fn new(_instance_desc: InstanceDescriptor) -> Self {
-        if Self::enabled_backend_features().is_empty() {
+        if !Self::any_backend_feature_enabled() {
             panic!(
                 "No wgpu backend feature that is implemented for the target platform was enabled. \
-                 See `wgpu::Instance::enabled_backend_features()` for more information."
+                 See `wgpu::Instance::any_backend_feature_enabled()` for more information."
             );
         }
 
@@ -1835,7 +1835,7 @@ impl Instance {
         }
 
         unreachable!(
-            "Earlier check of `enabled_backend_features` should have prevented getting here!"
+            "Earlier check of `any_backend_feature_enabled` should have prevented getting here!"
         );
     }
 
@@ -2321,19 +2321,6 @@ impl Device {
     }
 
     /// Creates a shader module from either SPIR-V or WGSL source code.
-    ///
-    /// <div class="warning">
-    // NOTE: Keep this in sync with `naga::front::wgsl::parse_str`!
-    // NOTE: Keep this in sync with `wgpu_core::Global::device_create_shader_module`!
-    ///
-    /// This function may consume a lot of stack space. Compiler-enforced limits for parsing
-    /// recursion exist; if shader compilation runs into them, it will return an error gracefully.
-    /// However, on some build profiles and platforms, the default stack size for a thread may be
-    /// exceeded before this limit is reached during parsing. Callers should ensure that there is
-    /// enough stack space for this, particularly if calls to this method are exposed to user
-    /// input.
-    ///
-    /// </div>
     pub fn create_shader_module(&self, desc: ShaderModuleDescriptor<'_>) -> ShaderModule {
         let (id, data) = DynContext::device_create_shader_module(
             &*self.context,
@@ -2741,12 +2728,6 @@ impl Device {
             Box::new(callback),
         )
     }
-
-    /// Test-only function to make this device invalid.
-    #[doc(hidden)]
-    pub fn make_invalid(&self) {
-        DynContext::device_make_invalid(&*self.context, &self.id, self.data.as_ref())
-    }
 }
 
 impl Drop for Device {
@@ -2832,7 +2813,7 @@ pub struct CreateSurfaceError {
 enum CreateSurfaceErrorKind {
     /// Error from [`wgpu_hal`].
     #[cfg(wgpu_core)]
-    Hal(wgc::instance::CreateSurfaceError),
+    Hal(hal::InstanceError),
 
     /// Error from WebGPU surface creation.
     #[allow(dead_code)] // may be unused depending on target and features
@@ -2867,8 +2848,8 @@ impl error::Error for CreateSurfaceError {
 }
 
 #[cfg(wgpu_core)]
-impl From<wgc::instance::CreateSurfaceError> for CreateSurfaceError {
-    fn from(e: wgc::instance::CreateSurfaceError) -> Self {
+impl From<hal::InstanceError> for CreateSurfaceError {
+    fn from(e: hal::InstanceError) -> Self {
         Self {
             inner: CreateSurfaceErrorKind::Hal(e),
         }
@@ -3153,10 +3134,10 @@ impl Texture {
     ///
     /// - The raw handle obtained from the hal Texture must not be manually destroyed
     #[cfg(wgpu_core)]
-    pub unsafe fn as_hal<A: wgc::hal_api::HalApi, F: FnOnce(Option<&A::Texture>) -> R, R>(
+    pub unsafe fn as_hal<A: wgc::hal_api::HalApi, F: FnOnce(Option<&A::Texture>)>(
         &self,
         hal_texture_callback: F,
-    ) -> R {
+    ) {
         let texture = self.data.as_ref().downcast_ref().unwrap();
 
         if let Some(ctx) = self
@@ -3164,7 +3145,7 @@ impl Texture {
             .as_any()
             .downcast_ref::<crate::backend::ContextWgpuCore>()
         {
-            unsafe { ctx.texture_as_hal::<A, F, R>(texture, hal_texture_callback) }
+            unsafe { ctx.texture_as_hal::<A, F>(texture, hal_texture_callback) }
         } else {
             hal_texture_callback(None)
         }
@@ -3508,39 +3489,9 @@ impl CommandEncoder {
             destination_offset,
         )
     }
-
-    /// Returns the inner hal CommandEncoder using a callback. The hal command encoder will be `None` if the
-    /// backend type argument does not match with this wgpu CommandEncoder
-    ///
-    /// This method will start the wgpu_core level command recording.
-    ///
-    /// # Safety
-    ///
-    /// - The raw handle obtained from the hal CommandEncoder must not be manually destroyed
-    #[cfg(wgpu_core)]
-    pub unsafe fn as_hal_mut<
-        A: wgc::hal_api::HalApi,
-        F: FnOnce(Option<&mut A::CommandEncoder>) -> R,
-        R,
-    >(
-        &mut self,
-        hal_command_encoder_callback: F,
-    ) -> Option<R> {
-        use core::id::CommandEncoderId;
-
-        self.context
-            .as_any()
-            .downcast_ref::<crate::backend::ContextWgpuCore>()
-            .map(|ctx| unsafe {
-                ctx.command_encoder_as_hal_mut::<A, F, R>(
-                    CommandEncoderId::from(self.id.unwrap()),
-                    hal_command_encoder_callback,
-                )
-            })
-    }
 }
 
-/// [`Features::TIMESTAMP_QUERY_INSIDE_ENCODERS`] must be enabled on the device in order to call these functions.
+/// [`Features::TIMESTAMP_QUERY`] must be enabled on the device in order to call these functions.
 impl CommandEncoder {
     /// Issue a timestamp command at this point in the queue.
     /// The timestamp will be written to the specified query set, at the specified index.
@@ -3549,11 +3500,6 @@ impl CommandEncoder {
     /// the value in nanoseconds. Absolute values have no meaning,
     /// but timestamps can be subtracted to get the time it takes
     /// for a string of operations to complete.
-    ///
-    /// Attention: Since commands within a command recorder may be reordered,
-    /// there is no strict guarantee that timestamps are taken after all commands
-    /// recorded so far and all before all commands recorded after.
-    /// This may depend both on the backend and the driver.
     pub fn write_timestamp(&mut self, query_set: &QuerySet, query_index: u32) {
         DynContext::command_encoder_write_timestamp(
             &*self.context,
@@ -4311,7 +4257,7 @@ impl<'a> ComputePass<'a> {
 
 /// [`Features::PIPELINE_STATISTICS_QUERY`] must be enabled on the device in order to call these functions.
 impl<'a> ComputePass<'a> {
-    /// Start a pipeline statistics query on this compute pass. It can be ended with
+    /// Start a pipeline statistics query on this render pass. It can be ended with
     /// `end_pipeline_statistics_query`. Pipeline statistics queries may not be nested.
     pub fn begin_pipeline_statistics_query(&mut self, query_set: &QuerySet, query_index: u32) {
         DynContext::compute_pass_begin_pipeline_statistics_query(
@@ -4324,7 +4270,7 @@ impl<'a> ComputePass<'a> {
         );
     }
 
-    /// End the pipeline statistics query on this compute pass. It can be started with
+    /// End the pipeline statistics query on this render pass. It can be started with
     /// `begin_pipeline_statistics_query`. Pipeline statistics queries may not be nested.
     pub fn end_pipeline_statistics_query(&mut self) {
         DynContext::compute_pass_end_pipeline_statistics_query(
@@ -4851,11 +4797,11 @@ impl Surface<'_> {
         let caps = self.get_capabilities(adapter);
         Some(SurfaceConfiguration {
             usage: wgt::TextureUsages::RENDER_ATTACHMENT,
-            format: *caps.formats.first()?,
+            format: *caps.formats.get(0)?,
             width,
             height,
             desired_maximum_frame_latency: 2,
-            present_mode: *caps.present_modes.first()?,
+            present_mode: *caps.present_modes.get(0)?,
             alpha_mode: wgt::CompositeAlphaMode::Auto,
             view_formats: vec![],
         })
@@ -4967,7 +4913,7 @@ impl Surface<'_> {
 pub struct Id<T>(NonZeroU64, PhantomData<*mut T>);
 
 impl<T> Id<T> {
-    /// For testing use only. We provide no guarantees about the actual value of the ids.
+    /// For testing use only. We provide no guarentees about the actual value of the ids.
     #[doc(hidden)]
     pub fn inner(&self) -> u64 {
         self.0.get()
@@ -5005,7 +4951,7 @@ impl<T> Eq for Id<T> {}
 
 impl<T> PartialOrd for Id<T> {
     fn partial_cmp(&self, other: &Id<T>) -> Option<Ordering> {
-        Some(self.cmp(other))
+        self.0.partial_cmp(&other.0)
     }
 }
 
@@ -5088,34 +5034,6 @@ impl TextureView {
     /// The returned value is guaranteed to be different for all resources created from the same `Instance`.
     pub fn global_id(&self) -> Id<Self> {
         Id(self.id.global_id(), PhantomData)
-    }
-
-    /// Returns the inner hal TextureView using a callback. The hal texture will be `None` if the
-    /// backend type argument does not match with this wgpu Texture
-    ///
-    /// # Safety
-    ///
-    /// - The raw handle obtained from the hal TextureView must not be manually destroyed
-    #[cfg(wgpu_core)]
-    pub unsafe fn as_hal<A: wgc::hal_api::HalApi, F: FnOnce(Option<&A::TextureView>) -> R, R>(
-        &self,
-        hal_texture_view_callback: F,
-    ) -> R {
-        use core::id::TextureViewId;
-
-        let texture_view_id = TextureViewId::from(self.id);
-
-        if let Some(ctx) = self
-            .context
-            .as_any()
-            .downcast_ref::<crate::backend::ContextWgpuCore>()
-        {
-            unsafe {
-                ctx.texture_view_as_hal::<A, F, R>(texture_view_id, hal_texture_view_callback)
-            }
-        } else {
-            hal_texture_view_callback(None)
-        }
     }
 }
 
@@ -5240,21 +5158,6 @@ pub enum Error {
         /// Description of the validation error.
         description: String,
     },
-    /// Internal error. Used for signalling any failures not explicitly expected by WebGPU.
-    ///
-    /// These could be due to internal implementation or system limits being reached.
-    Internal {
-        /// Lower level source of the error.
-        #[cfg(send_sync)]
-        #[cfg_attr(docsrs, doc(cfg(all())))]
-        source: Box<dyn error::Error + Send + 'static>,
-        /// Lower level source of the error.
-        #[cfg(not(send_sync))]
-        #[cfg_attr(docsrs, doc(cfg(all())))]
-        source: Box<dyn error::Error + 'static>,
-        /// Description of the internal GPU error.
-        description: String,
-    },
 }
 #[cfg(send_sync)]
 static_assertions::assert_impl_all!(Error: Send);
@@ -5264,7 +5167,6 @@ impl error::Error for Error {
         match self {
             Error::OutOfMemory { source } => Some(source.as_ref()),
             Error::Validation { source, .. } => Some(source.as_ref()),
-            Error::Internal { source, .. } => Some(source.as_ref()),
         }
     }
 }
@@ -5274,7 +5176,6 @@ impl fmt::Display for Error {
         match self {
             Error::OutOfMemory { .. } => f.write_str("Out of Memory"),
             Error::Validation { description, .. } => f.write_str(description),
-            Error::Internal { description, .. } => f.write_str(description),
         }
     }
 }

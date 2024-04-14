@@ -1,7 +1,6 @@
 use crate::device::DeviceError;
 use crate::resource::Resource;
 use crate::snatch::SnatchGuard;
-use crate::track::TrackerIndex;
 use crate::{
     binding_model::{
         BindError, BindGroup, LateMinBufferBindingSizeMismatch, PushConstantUploadError,
@@ -19,6 +18,7 @@ use crate::{
     hal_api::HalApi,
     hal_label, id,
     id::DeviceId,
+    identity::GlobalIdentityHandlerFactory,
     init_tracker::MemoryInitKind,
     pipeline,
     resource::{self},
@@ -29,19 +29,25 @@ use crate::{
 };
 
 use hal::CommandEncoder as _;
-#[cfg(feature = "serde")]
+#[cfg(any(feature = "serial-pass", feature = "replay"))]
 use serde::Deserialize;
-#[cfg(feature = "serde")]
+#[cfg(any(feature = "serial-pass", feature = "trace"))]
 use serde::Serialize;
 
 use thiserror::Error;
 
-use std::sync::Arc;
 use std::{fmt, mem, str};
 
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    any(feature = "serial-pass", feature = "trace"),
+    derive(serde::Serialize)
+)]
+#[cfg_attr(
+    any(feature = "serial-pass", feature = "replay"),
+    derive(serde::Deserialize)
+)]
 pub enum ComputeCommand {
     SetBindGroup {
         index: u32,
@@ -92,16 +98,16 @@ pub enum ComputeCommand {
     EndPipelineStatisticsQuery,
 }
 
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serial-pass", derive(serde::Deserialize, serde::Serialize))]
 pub struct ComputePass {
     base: BasePass<ComputeCommand>,
     parent_id: id::CommandEncoderId,
     timestamp_writes: Option<ComputePassTimestampWrites>,
 
     // Resource binding dedupe state.
-    #[cfg_attr(feature = "serde", serde(skip))]
+    #[cfg_attr(feature = "serial-pass", serde(skip))]
     current_bind_groups: BindGroupStateChange,
-    #[cfg_attr(feature = "serde", serde(skip))]
+    #[cfg_attr(feature = "serial-pass", serde(skip))]
     current_pipeline: StateChange<id::ComputePipelineId>,
 }
 
@@ -145,7 +151,8 @@ impl fmt::Debug for ComputePass {
 /// Describes the writing of timestamp values in a compute pass.
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(any(feature = "serial-pass", feature = "trace"), derive(Serialize))]
+#[cfg_attr(any(feature = "serial-pass", feature = "replay"), derive(Deserialize))]
 pub struct ComputePassTimestampWrites {
     /// The query set to write the timestamps to.
     pub query_set: id::QuerySetId,
@@ -273,14 +280,14 @@ where
     }
 }
 
-struct State<'a, A: HalApi> {
+struct State<A: HalApi> {
     binder: Binder<A>,
     pipeline: Option<id::ComputePipelineId>,
-    scope: UsageScope<'a, A>,
+    scope: UsageScope<A>,
     debug_scope_depth: u32,
 }
 
-impl<'a, A: HalApi> State<'a, A> {
+impl<A: HalApi> State<A> {
     fn is_ready(&self) -> Result<(), DispatchError> {
         let bind_mask = self.binder.invalid_mask();
         if bind_mask != 0 {
@@ -306,8 +313,8 @@ impl<'a, A: HalApi> State<'a, A> {
         &mut self,
         raw_encoder: &mut A::CommandEncoder,
         base_trackers: &mut Tracker<A>,
-        bind_group_guard: &Storage<BindGroup<A>>,
-        indirect_buffer: Option<TrackerIndex>,
+        bind_group_guard: &Storage<BindGroup<A>, id::BindGroupId>,
+        indirect_buffer: Option<id::BufferId>,
         snatch_guard: &SnatchGuard,
     ) -> Result<(), UsageConflict> {
         for id in self.binder.list_active() {
@@ -341,7 +348,7 @@ impl<'a, A: HalApi> State<'a, A> {
 
 // Common routines between render/compute
 
-impl Global {
+impl<G: GlobalIdentityHandlerFactory> Global<G> {
     pub fn command_encoder_run_compute_pass<A: HalApi>(
         &self,
         encoder_id: id::CommandEncoderId,
@@ -366,8 +373,7 @@ impl Global {
 
         let hub = A::hub(self);
 
-        let cmd_buf: Arc<CommandBuffer<A>> =
-            CommandBuffer::get_encoder(hub, encoder_id).map_pass_err(pass_scope)?;
+        let cmd_buf = CommandBuffer::get_encoder(hub, encoder_id).map_pass_err(pass_scope)?;
         let device = &cmd_buf.device;
         if !device.is_valid() {
             return Err(ComputePassErrorInner::InvalidDevice(
@@ -405,11 +411,12 @@ impl Global {
         let pipeline_guard = hub.compute_pipelines.read();
         let query_set_guard = hub.query_sets.read();
         let buffer_guard = hub.buffers.read();
+        let texture_guard = hub.textures.read();
 
         let mut state = State {
             binder: Binder::new(),
             pipeline: None,
-            scope: device.new_usage_scope(),
+            scope: UsageScope::new(&*buffer_guard, &*texture_guard),
             debug_scope_depth: 0,
         };
         let mut temp_offsets = Vec::new();
@@ -425,7 +432,7 @@ impl Global {
                 .map_pass_err(pass_scope)?;
 
             // Unlike in render passes we can't delay resetting the query sets since
-            // there is no auxiliary pass.
+            // there is no auxillary pass.
             let range = if let (Some(index_a), Some(index_b)) =
                 (tw.beginning_of_pass_write_index, tw.end_of_pass_write_index)
             {
@@ -454,14 +461,17 @@ impl Global {
 
         let snatch_guard = device.snatchable_lock.read();
 
-        let indices = &device.tracker_indices;
-        tracker.buffers.set_size(indices.buffers.size());
-        tracker.textures.set_size(indices.textures.size());
-        tracker.bind_groups.set_size(indices.bind_groups.size());
-        tracker
-            .compute_pipelines
-            .set_size(indices.compute_pipelines.size());
-        tracker.query_sets.set_size(indices.query_sets.size());
+        tracker.set_size(
+            Some(&*buffer_guard),
+            Some(&*texture_guard),
+            None,
+            None,
+            Some(&*bind_group_guard),
+            Some(&*pipeline_guard),
+            None,
+            None,
+            Some(&*query_set_guard),
+        );
 
         let discard_hal_labels = self
             .instance
@@ -718,12 +728,8 @@ impl Global {
                         .buffers
                         .merge_single(&*buffer_guard, buffer_id, hal::BufferUses::INDIRECT)
                         .map_pass_err(scope)?;
-                    check_buffer_usage(
-                        buffer_id,
-                        indirect_buffer.usage,
-                        wgt::BufferUsages::INDIRECT,
-                    )
-                    .map_pass_err(scope)?;
+                    check_buffer_usage(indirect_buffer.usage, wgt::BufferUsages::INDIRECT)
+                        .map_pass_err(scope)?;
 
                     let end_offset = offset + mem::size_of::<wgt::DispatchIndirectArgs>() as u64;
                     if end_offset > indirect_buffer.size {
@@ -756,7 +762,7 @@ impl Global {
                             raw,
                             &mut intermediate_trackers,
                             &*bind_group_guard,
-                            Some(indirect_buffer.as_info().tracker_index()),
+                            Some(buffer_id),
                             &snatch_guard,
                         )
                         .map_pass_err(scope)?;
@@ -870,7 +876,6 @@ impl Global {
             transit,
             &mut tracker.textures,
             device,
-            &snatch_guard,
         );
         CommandBuffer::insert_barriers_from_tracker(
             transit,
